@@ -1,0 +1,129 @@
+seed: 0
+
+data:
+  manifest_path: assets/datasets/graspdata_YCB_liberhand/train.json
+  cloud_type: global
+  frame: world
+  n_points: 2048
+
+model:
+  algorithm: cvae
+  input_encoder:
+    name: pointnet
+  common:
+    point_feat_dim: 128
+    init_pose_dim: 6
+    squeeze_pose_dim: 6
+    joint_dim: 20
+  algorithms:
+    cvae:
+      latent_dim: 64
+      encoder_hidden_dims: [512, 256]
+      decoder_hidden_dims: [256, 256]
+    diffusion: {}
+    flow: {}
+  input_encoders:
+    pointnet:
+      point_feature_dim: 3
+      local_conv_hidden_dims: [64, 128, 256]
+      global_mlp_hidden_dims: [256]
+      activation: leaky_relu
+    pointnet2: {}
+    pct: {}
+
+hand:
+  xml_path: ./assets/hands/liberhand/liberhand_right.xml
+  prepared_joints:
+    [
+      0.0,
+      0.5,
+      0.4,
+      0.4,
+      0.0,
+      0.5,
+      0.4,
+      0.4,
+      0.0,
+      0.3,
+      0.3,
+      0.3,
+      0.0,
+      0.3,
+      0.3,
+      0.3,
+      1.6,
+      0.0,
+      0.3,
+      0.3,
+    ]
+  approach_joints:
+    [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.6,
+      0.0,
+      0.0,
+      0.0,
+    ]
+  target_body_params:
+    hand_right_f13: [0.5, 1.0]
+    hand_right_f14_end: [0.3, 0.2]
+    hand_right_f23: [0.5, 1.0]
+    hand_right_f24_end: [0.3, 0.2]
+    hand_right_f33: [0.5, 1.0]
+    hand_right_f34_end: [0.3, 0.2]
+    hand_right_f43: [0.5, 1.0]
+    hand_right_f44_end: [0.3, 0.2]
+    hand_right_f53: [0.5, 1.0]
+    hand_right_f54_end: [0.3, 0.2]
+
+train:
+  batch_size: 128
+  max_steps: 5000
+  smoke_steps: 2
+  num_workers: 0
+  pin_memory: false
+  persistent_workers: false
+  device: cpu
+  lr: 0.001
+  lr_min: 0.00001
+  weight_decay: 0.0001
+  grad_clip: 10.0
+  beta_kld: 0.001
+  log_every: 50
+  save_every: 500
+  output_dir: outputs/ycb_liberhand_sc
+
+sim:
+  split: train
+  ckpt_path: null
+  samples_per_object_scale: 5
+  num_grasp_samples: 16
+  visualize: false
+  device: cpu
+  output_dir: outputs/sim_sc
+  extforce:
+    duration: 0.5
+    trans_thresh: 0.05
+    angle_thresh: 10.0
+    force_mag: 1.0
+    check_step: 50
+
+evaluator:
+  enabled: false
+  ckpt_path: null
+  topk: 5
