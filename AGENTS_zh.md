@@ -65,7 +65,10 @@ object.xml
 convex_parts/*.obj
 grasp.h5
 grasp.npy
-partial_pc_warp/
+grasp_fail.h5
+grasp_fail.npy
+pc_warp/
+  global_pc.npy
   cam_in.npy
   cam_ex_XX.npy
   partial_pc_XX.npy
@@ -88,6 +91,8 @@ partial_pc_warp/
 
 - 每个 object-scale 条目必须有一个源文件：`grasp.h5`
 - 每个 object-scale 条目必须有一个派生文件：`grasp.npy`
+- 每个 object-scale 条目必须有一个失败样本源文件：`grasp_fail.h5`
+- 每个 object-scale 条目必须有一个失败样本派生文件：`grasp_fail.npy`
 - `grasp.npy` 必须由 `grasp.h5` 转换而来，且抓取数值完全一致
 - 点云必须独立存储，不能打包进 `grasp.npy`
 - 局部点云渲染输出属于后处理结果，需与抓取数组分离
@@ -105,8 +110,14 @@ partial_pc_warp/
 - `qpos_squeeze: [tx, ty, tz, qw, qx, qy, qz, q1...qN]`
 - `meta: {}`
 
+`grasp_fail.h5` 必需摘要字段：
+
+- `qpos_fail: [tx, ty, tz, qw, qx, qy, qz, q1...qN]`
+- `failure_stage: str`
+
 局部点云渲染输出必须包括：
 
+- `global_pc.npy`
 - `cam_in.npy`
 - `cam_ex_XX.npy`
 - `partial_pc_XX.npy`
@@ -124,7 +135,18 @@ partial_pc_warp/
 - 按 `object_name` 切分，而不是按 object-scale 条目切分
 - 同一物体的所有 scale 必须留在同一个 split 中
 - 默认对唯一物体数做约 `80/20` 切分，并使用配置中的 `seed` 打乱
-- 只有 `grasp.h5`、`grasp.npy` 和所需渲染输出都存在，条目才可进入清单
+- 只有正样本抓取输出、失败样本输出和所需渲染输出都存在，条目才可进入清单
+
+split 记录应包含：
+
+- `grasp_h5_path`
+- `grasp_npy_path`
+- `grasp_h5_fail_path`
+- `grasp_fail_npy_path`
+- `global_pc_path`
+- `partial_pc_path[]`
+- `partial_pc_cam_path[]`
+- `cam_ex_path[]`
 
 ## 数据与坐标系约定
 
@@ -249,7 +271,7 @@ python -m src.print_dataset --config configs/ycb_liberhand_sc.yaml --split train
   - `model.input_encoder.name`
   - `model.prediction_structure.name`
   - `seed`
-  - `samples_per_object_scale`
+  - `sim.num_grasp_samples`
 - 填写时保留各自行自己的实验名称，但重复配置行复用相同指标与 `summary_path`
 
 ## 提交与 PR 规范

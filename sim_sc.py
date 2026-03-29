@@ -4,14 +4,15 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
 import numpy as np
 import torch
 
 from models import build_model
+from models.evaluator import GraspEvaluator
 from src.config import (
     apply_overrides,
     load_config,
@@ -67,6 +68,64 @@ def load_generator(
     return model, checkpoint_config
 
 
+def load_evaluator(
+    checkpoint_path: str,
+    device: torch.device,
+) -> tuple[GraspEvaluator, dict[str, Any]]:
+    """加载抓取评估网络 checkpoint。"""
+    checkpoint_file = Path(checkpoint_path).expanduser().resolve()
+    if not checkpoint_file.exists():
+        raise FileNotFoundError(f"Evaluator checkpoint not found: {checkpoint_file}")
+    payload = torch.load(checkpoint_file, map_location="cpu")
+    checkpoint_config = dict(payload["config"])
+    model = GraspEvaluator(checkpoint_config).to(device)
+    model.load_state_dict(payload["model"], strict=True)
+    model.eval()
+    return model, checkpoint_config
+
+
+def build_sim_output_dir(checkpoint_path: str) -> Path:
+    """仿真输出固定落到训练 run 目录下的 sim/。"""
+    checkpoint_file = Path(checkpoint_path).expanduser().resolve()
+    run_dir = checkpoint_file.parent
+    sim_dir = run_dir / "sim"
+    sim_dir.mkdir(parents=True, exist_ok=True)
+    return sim_dir
+
+
+def validate_evaluator_runtime(
+    sim_config: dict[str, Any],
+    generator_config: dict[str, Any],
+    evaluator_config: dict[str, Any],
+) -> None:
+    """检查 evaluator 与当前仿真设置是否一致。"""
+    sim_frame = normalize_frame(str(sim_config["data"]["frame"]))
+    sim_cloud_type = normalize_cloud_type(str(sim_config["data"]["cloud_type"]))
+    evaluator_frame = normalize_frame(str(evaluator_config["data"]["frame"]))
+    evaluator_cloud_type = normalize_cloud_type(str(evaluator_config["data"]["cloud_type"]))
+    if evaluator_frame != sim_frame:
+        raise ValueError(
+            f"Evaluator frame mismatch: evaluator={evaluator_frame}, sim={sim_frame}."
+        )
+    if evaluator_cloud_type != sim_cloud_type:
+        raise ValueError(
+            "Evaluator cloud_type mismatch: "
+            f"evaluator={evaluator_cloud_type}, sim={sim_cloud_type}."
+        )
+
+    generator_encoder = str(
+        generator_config["model"]["input_encoder"]["name"]
+    ).strip().lower()
+    evaluator_encoder = str(
+        evaluator_config["model"]["input_encoder"]["name"]
+    ).strip().lower()
+    if evaluator_encoder != generator_encoder:
+        raise ValueError(
+            "Evaluator input encoder mismatch: "
+            f"evaluator={evaluator_encoder}, generator={generator_encoder}."
+        )
+
+
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -74,11 +133,6 @@ def main() -> None:
     config = load_config(args.config)
     config = apply_overrides(config, args.set)
     validate_sim_config(config)
-
-    if bool(config.get("evaluator", {}).get("enabled", False)):
-        raise NotImplementedError(
-            "Evaluator is reserved in the interface but not implemented in the current mainline."
-        )
 
     seed = int(config["seed"])
     set_random_seed(seed)
@@ -88,6 +142,24 @@ def main() -> None:
     if not checkpoint_path:
         raise ValueError("sim.ckpt_path or --ckpt-path is required.")
     model, checkpoint_config = load_generator(str(checkpoint_path), device=device)
+    evaluator_enabled = bool(config.get("evaluator", {}).get("enabled", False))
+    evaluator_model: GraspEvaluator | None = None
+    evaluator_topk = int(config.get("evaluator", {}).get("topk", 0))
+    if evaluator_enabled:
+        evaluator_ckpt_path = str(config.get("evaluator", {}).get("ckpt_path") or "").strip()
+        if not evaluator_ckpt_path:
+            raise ValueError("evaluator.ckpt_path is required when evaluator.enabled=true.")
+        if evaluator_topk <= 0:
+            raise ValueError("evaluator.topk must be positive when evaluator.enabled=true.")
+        evaluator_model, evaluator_checkpoint_config = load_evaluator(
+            evaluator_ckpt_path,
+            device=device,
+        )
+        validate_evaluator_runtime(
+            sim_config=config,
+            generator_config=checkpoint_config,
+            evaluator_config=evaluator_checkpoint_config,
+        )
 
     dataset_root, manifest_items = load_manifest(
         str(config["data"]["manifest_path"]),
@@ -103,16 +175,22 @@ def main() -> None:
             f"hand.prepared_joints length {prepared_joints.shape[0]} != joint_dim {joint_dim}"
         )
 
-    samples_per_object_scale = int(config["sim"]["samples_per_object_scale"])
     num_grasp_samples = int(config["sim"]["num_grasp_samples"])
+    if evaluator_enabled and evaluator_topk > num_grasp_samples:
+        raise ValueError(
+            "evaluator.topk cannot exceed sim.num_grasp_samples. "
+            f"topk={evaluator_topk}, num_grasp_samples={num_grasp_samples}"
+        )
     visualize = bool(args.visualize or config["sim"].get("visualize", False))
     extforce_config = dict(config["sim"]["extforce"])
 
     summary_items: list[dict[str, Any]] = []
-    total_attempts = 0
-    successful_attempts = 0
-    total_candidates = 0
+    total_generated_candidates = 0
+    total_simulated_candidates = 0
     successful_candidates = 0
+    total_sampling_time_sec = 0.0
+    total_scoring_time_sec = 0.0
+    total_simulation_time_sec = 0.0
 
     for item_index, item in enumerate(manifest_items):
         rng = np.random.default_rng(seed + item_index * 100003)
@@ -128,83 +206,128 @@ def main() -> None:
 
         attempt_records: list[dict[str, Any]] = []
         object_success = False
+        object_successful_candidates = 0
+        object_total_candidates = 0
         try:
-            for attempt_index in range(samples_per_object_scale):
-                point_cloud_sample = load_conditioning_point_cloud(
-                    dataset_root=dataset_root,
-                    item=item,
-                    cloud_type=cloud_type,
-                    frame=frame,
-                    n_points=n_points,
-                    rng=rng,
+            point_cloud_sample = load_conditioning_point_cloud(
+                dataset_root=dataset_root,
+                item=item,
+                cloud_type=cloud_type,
+                frame=frame,
+                n_points=n_points,
+                rng=rng,
+            )
+            batch = {
+                "point_cloud": torch.tensor(
+                    point_cloud_sample.point_cloud[None, ...],
+                    dtype=torch.float32,
+                    device=device,
                 )
-                batch = {
-                    "point_cloud": torch.tensor(
-                        point_cloud_sample.point_cloud[None, ...],
-                        dtype=torch.float32,
-                        device=device,
-                    )
+            }
+            sampling_start = perf_counter()
+            with torch.no_grad():
+                predictions = model.sample(batch=batch, num_samples=num_grasp_samples)
+            sampling_time_sec = perf_counter() - sampling_start
+            total_sampling_time_sec += sampling_time_sec
+            total_generated_candidates += num_grasp_samples
+
+            selected_candidate_indices = np.arange(num_grasp_samples, dtype=np.int64)
+            candidate_scores: np.ndarray | None = None
+            scoring_time_sec = 0.0
+            if evaluator_model is not None:
+                scoring_start = perf_counter()
+                evaluator_batch = {
+                    "point_cloud": batch["point_cloud"].repeat(num_grasp_samples, 1, 1),
+                    "grasp_pose": predictions["pred_squeeze_pose"][0],
+                    "grasp_joint": predictions["pred_squeeze_joint"][0],
                 }
                 with torch.no_grad():
-                    predictions = model.sample(batch=batch, num_samples=num_grasp_samples)
+                    candidate_scores = (
+                        evaluator_model.score(evaluator_batch)
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .astype(np.float32)
+                    )
+                scoring_time_sec = perf_counter() - scoring_start
+                total_scoring_time_sec += scoring_time_sec
+                selected_candidate_indices = np.argsort(-candidate_scores)[:evaluator_topk]
 
-                candidate_records: list[dict[str, Any]] = []
-                attempt_success = False
-                for candidate_index in range(num_grasp_samples):
-                    squeeze_pose = (
-                        predictions["pred_squeeze_pose"][0, candidate_index]
-                        .detach()
-                        .cpu()
-                        .numpy()
-                        .astype(np.float32)
-                    )
-                    squeeze_joint = (
-                        predictions["pred_squeeze_joint"][0, candidate_index]
-                        .detach()
-                        .cpu()
-                        .numpy()
-                        .astype(np.float32)
-                    )
-                    squeeze_matrix = se3_log_to_matrix(squeeze_pose)
-                    if frame == "camera":
-                        if point_cloud_sample.cam_extrinsic is None:
-                            raise ValueError(
-                                f"{item.object_scale_key} is missing camera extrinsic in camera mode."
-                            )
-                        squeeze_matrix = camera_to_world_pose(
-                            squeeze_matrix, point_cloud_sample.cam_extrinsic
+            candidate_records: list[dict[str, Any]] = []
+            simulation_start = perf_counter()
+            for rank_index, candidate_index in enumerate(selected_candidate_indices.tolist()):
+                squeeze_pose = (
+                    predictions["pred_squeeze_pose"][0, candidate_index]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32)
+                )
+                squeeze_joint = (
+                    predictions["pred_squeeze_joint"][0, candidate_index]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.float32)
+                )
+                squeeze_matrix = se3_log_to_matrix(squeeze_pose)
+                if frame == "camera":
+                    if point_cloud_sample.cam_extrinsic is None:
+                        raise ValueError(
+                            f"{item.object_scale_key} is missing camera extrinsic in camera mode."
                         )
-                    qpos_squeeze = matrix_to_qpos(squeeze_matrix, squeeze_joint)
-                    qpos_prepared = matrix_to_qpos(squeeze_matrix, prepared_joints)
-                    success, pos_delta, angle_delta = mjho_valid.sim_under_extforce(
-                        qpos_target=qpos_squeeze.copy(),
-                        qpos_prepared=qpos_prepared.copy(),
-                        visualize=visualize,
-                        **extforce_config,
+                    squeeze_matrix = camera_to_world_pose(
+                        squeeze_matrix, point_cloud_sample.cam_extrinsic
                     )
-                    total_candidates += 1
-                    successful_candidates += int(bool(success))
-                    attempt_success = attempt_success or bool(success)
-                    candidate_records.append(
-                        {
-                            "candidate_index": candidate_index,
-                            "success": bool(success),
-                            "pos_delta": float(pos_delta),
-                            "angle_delta": float(angle_delta),
-                        }
-                    )
-
-                total_attempts += 1
-                successful_attempts += int(attempt_success)
-                object_success = object_success or attempt_success
-                attempt_records.append(
+                qpos_squeeze = matrix_to_qpos(squeeze_matrix, squeeze_joint)
+                qpos_prepared = matrix_to_qpos(squeeze_matrix, prepared_joints)
+                success, pos_delta, angle_delta = mjho_valid.sim_under_extforce(
+                    qpos_target=qpos_squeeze.copy(),
+                    qpos_prepared=qpos_prepared.copy(),
+                    visualize=visualize,
+                    **extforce_config,
+                )
+                total_simulated_candidates += 1
+                successful_candidates += int(bool(success))
+                object_successful_candidates += int(bool(success))
+                evaluator_score = None
+                if candidate_scores is not None:
+                    evaluator_score = float(candidate_scores[candidate_index])
+                candidate_records.append(
                     {
-                        "attempt_index": attempt_index,
-                        "view_index": point_cloud_sample.view_index,
-                        "success": attempt_success,
-                        "candidates": candidate_records,
+                        "rank_index": rank_index,
+                        "candidate_index": candidate_index,
+                        "evaluator_score": evaluator_score,
+                        "success": bool(success),
+                        "pos_delta": float(pos_delta),
+                        "angle_delta": float(angle_delta),
                     }
                 )
+            simulation_time_sec = perf_counter() - simulation_start
+            total_simulation_time_sec += simulation_time_sec
+
+            object_total_candidates = len(selected_candidate_indices)
+            object_success = object_successful_candidates > 0
+            attempt_records.append(
+                {
+                    "attempt_index": 0,
+                    "view_index": point_cloud_sample.view_index,
+                    "success": object_success,
+                    "success_count": object_successful_candidates,
+                    "generated_num_grasp_samples": num_grasp_samples,
+                    "simulated_num_grasp_samples": object_total_candidates,
+                    "grasp_success_str": (
+                        f"{object_successful_candidates}/{object_total_candidates}"
+                    ),
+                    "grasp_success_rate": float(
+                        object_successful_candidates / max(1, object_total_candidates)
+                    ),
+                    "sampling_time_sec": float(sampling_time_sec),
+                    "scoring_time_sec": float(scoring_time_sec),
+                    "simulation_time_sec": float(simulation_time_sec),
+                    "candidates": candidate_records,
+                }
+            )
         finally:
             viewer = getattr(mjho_valid, "viewer", None)
             if viewer is not None:
@@ -218,46 +341,81 @@ def main() -> None:
                 "object_scale_key": item.object_scale_key,
                 "object_name": item.object_name,
                 "success": object_success,
+                "success_count": object_successful_candidates,
+                "generated_num_grasp_samples": num_grasp_samples,
+                "simulated_num_grasp_samples": object_total_candidates,
+                "grasp_success_str": (
+                    f"{object_successful_candidates}/{object_total_candidates}"
+                ),
+                "grasp_success_rate": float(
+                    object_successful_candidates / max(1, object_total_candidates)
+                ),
                 "attempts": attempt_records,
             }
         )
         LOGGER.info(
-            "[sim_sc] item=%d/%d object_scale_key=%s success=%s",
+            "[sim_sc] item=%d/%d object_scale_key=%s grasp=%s success=%s",
             item_index + 1,
             len(manifest_items),
             item.object_scale_key,
+            f"{object_successful_candidates}/{object_total_candidates}",
             object_success,
         )
+        LOGGER.info(
+            "[sim_sc] generated=%d selected=%d sampling_time=%.4fs scoring_time=%.4fs simulation_time=%.4fs",
+            num_grasp_samples,
+            object_total_candidates,
+            attempt_records[0]["sampling_time_sec"],
+            attempt_records[0]["scoring_time_sec"],
+            attempt_records[0]["simulation_time_sec"],
+        )
 
-    output_root = Path(config["sim"].get("output_dir", "outputs/sim_sc")).expanduser().resolve()
-    run_dir = output_root / datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = build_sim_output_dir(str(checkpoint_path))
+    successful_objects = int(sum(1 for item in summary_items if item["success"]))
     summary = {
         "checkpoint_path": str(Path(checkpoint_path).expanduser().resolve()),
         "manifest_path": str(Path(config["data"]["manifest_path"]).expanduser().resolve()),
         "cloud_type": cloud_type,
         "frame": frame,
-        "samples_per_object_scale": samples_per_object_scale,
         "num_grasp_samples": num_grasp_samples,
+        "evaluator_enabled": evaluator_enabled,
+        "simulated_topk": (
+            evaluator_topk if evaluator_enabled else num_grasp_samples
+        ),
         "total_items": len(manifest_items),
-        "total_attempts": total_attempts,
-        "successful_attempts": successful_attempts,
-        "GSR": float(successful_attempts / max(1, total_attempts)),
-        "total_candidates": total_candidates,
+        "total_generated_candidates": total_generated_candidates,
+        "total_candidates": total_simulated_candidates,
         "successful_candidates": successful_candidates,
-        "candidate_success_rate": float(successful_candidates / max(1, total_candidates)),
-        "successful_objects": int(sum(1 for item in summary_items if item["success"])),
-        "OSR": float(
-            sum(1 for item in summary_items if item["success"]) / max(1, len(summary_items))
+        "GSR": float(successful_candidates / max(1, total_simulated_candidates)),
+        "successful_objects": successful_objects,
+        "OSR": float(successful_objects / max(1, len(summary_items))),
+        "total_sampling_time_sec": float(total_sampling_time_sec),
+        "avg_sampling_time_sec_per_object": float(
+            total_sampling_time_sec / max(1, len(summary_items))
+        ),
+        "avg_sampling_time_sec_per_generated_candidate": float(
+            total_sampling_time_sec / max(1, total_generated_candidates)
+        ),
+        "total_scoring_time_sec": float(total_scoring_time_sec),
+        "avg_scoring_time_sec_per_object": float(
+            total_scoring_time_sec / max(1, len(summary_items))
+        ),
+        "total_simulation_time_sec": float(total_simulation_time_sec),
+        "avg_simulation_time_sec_per_object": float(
+            total_simulation_time_sec / max(1, len(summary_items))
         ),
         "items": summary_items,
     }
+    (run_dir / "resolved_sim_config.json").write_text(
+        json.dumps(config, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     summary_path = run_dir / "sim_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     LOGGER.info(
-        "[sim_sc] finished GSR=%.6f candidate_success_rate=%.6f summary=%s",
+        "[sim_sc] finished GSR=%.6f OSR=%.6f summary=%s",
         summary["GSR"],
-        summary["candidate_success_rate"],
+        summary["OSR"],
         summary_path,
     )
 

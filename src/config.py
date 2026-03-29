@@ -115,10 +115,31 @@ def validate_train_config(config: dict[str, Any]) -> None:
 def validate_sim_config(config: dict[str, Any]) -> None:
     """校验仿真所需配置。"""
     validate_common_config(config)
-    get_required(config, "sim.samples_per_object_scale")
     get_required(config, "sim.num_grasp_samples")
     get_required(config, "sim.extforce.duration")
     get_required(config, "sim.extforce.trans_thresh")
     get_required(config, "sim.extforce.angle_thresh")
     get_required(config, "sim.extforce.force_mag")
     get_required(config, "sim.extforce.check_step")
+    if bool(config.get("evaluator", {}).get("enabled", False)):
+        get_required(config, "evaluator.ckpt_path")
+        get_required(config, "evaluator.topk")
+
+
+def validate_evaluator_train_config(config: dict[str, Any]) -> None:
+    """校验评估网络训练所需配置。"""
+    get_required(config, "seed")
+    get_required(config, "data.manifest_path")
+    normalize_cloud_type(get_required(config, "data.cloud_type"))
+    normalize_frame(get_required(config, "data.frame"))
+    get_required(config, "data.n_points")
+    get_required(config, "model.input_encoder.name")
+    get_required(config, "model.common.point_feat_dim")
+    get_required(config, "model.common.joint_dim")
+    get_required(config, "evaluator.model.grasp_feat_dim")
+    get_required(config, "evaluator.model.hidden_features")
+    get_required(config, "evaluator.model.num_blocks")
+    get_required(config, "evaluator.train.batch_size")
+    get_required(config, "evaluator.train.max_steps")
+    get_required(config, "evaluator.train.lr")
+    get_required(config, "evaluator.train.output_dir")

@@ -14,6 +14,8 @@ class ManifestItem:
     object_name: str
     mjcf_path: str
     grasp_h5_path: str
+    grasp_h5_fail_path: str | None
+    grasp_fail_npy_path: str | None
     partial_pc_path: tuple[str, ...]
     partial_pc_cam_path: tuple[str, ...]
     cam_ex_path: tuple[str, ...]
@@ -53,6 +55,14 @@ def _normalize_manifest_item(raw_item: Any) -> ManifestItem:
     object_name = _require_string(raw_item, "object_name")
     mjcf_path = _require_string(raw_item, "mjcf_path")
     grasp_h5_path = _require_string(raw_item, "grasp_h5_path")
+    grasp_h5_fail_path_raw = raw_item.get("grasp_h5_fail_path")
+    grasp_h5_fail_path = (
+        None if grasp_h5_fail_path_raw is None else str(grasp_h5_fail_path_raw)
+    )
+    grasp_fail_npy_path_raw = raw_item.get("grasp_fail_npy_path")
+    grasp_fail_npy_path = (
+        None if grasp_fail_npy_path_raw is None else str(grasp_fail_npy_path_raw)
+    )
     partial_pc_path = _require_string_list(raw_item, "partial_pc_path", allow_missing=True)
     partial_pc_cam_path = _require_string_list(
         raw_item, "partial_pc_cam_path", allow_missing=True
@@ -65,6 +75,8 @@ def _normalize_manifest_item(raw_item: Any) -> ManifestItem:
         object_name=object_name,
         mjcf_path=mjcf_path,
         grasp_h5_path=grasp_h5_path,
+        grasp_h5_fail_path=grasp_h5_fail_path,
+        grasp_fail_npy_path=grasp_fail_npy_path,
         partial_pc_path=tuple(partial_pc_path),
         partial_pc_cam_path=tuple(partial_pc_cam_path),
         cam_ex_path=tuple(cam_ex_path),

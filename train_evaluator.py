@@ -13,30 +13,30 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 
-from models import build_model
+from models.evaluator import GraspEvaluator
 from src.config import (
     apply_overrides,
     load_config,
     normalize_cloud_type,
     normalize_frame,
     set_random_seed,
-    validate_train_config,
+    validate_evaluator_train_config,
 )
-from src.grasp_dataset_sc import DistinctObjectBatchSampler, GraspDatasetSC
+from src.evaluator_dataset import DistinctObjectBatchSampler, EvaluatorDataset
 
 
 LOGGER = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train the single-condition PointNet + CVAE model.")
+    parser = argparse.ArgumentParser(description="Train the point-cloud grasp evaluator.")
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument(
         "--set",
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="Override config values, for example --set data.frame=camera",
+        help="Override config values, for example --set evaluator.train.batch_size=64",
     )
     parser.add_argument("--smoke", action="store_true")
     return parser.parse_args()
@@ -50,12 +50,11 @@ def build_device(device_name: str) -> torch.device:
 
 
 def build_output_dir(config: dict[str, Any]) -> Path:
-    output_root = Path(config["train"]["output_dir"]).expanduser().resolve()
-    algorithm = str(config["model"]["algorithm"]).strip().lower()
+    output_root = Path(config["evaluator"]["train"]["output_dir"]).expanduser().resolve()
     input_encoder_name = str(config["model"]["input_encoder"]["name"]).strip().lower()
     frame = normalize_frame(str(config["data"]["frame"]))
     cloud_type = normalize_cloud_type(str(config["data"]["cloud_type"]))
-    experiment_tag = f"{algorithm}_{input_encoder_name}_{frame}_{cloud_type}"
+    experiment_tag = f"{input_encoder_name}_{frame}_{cloud_type}"
     run_dir = output_root / experiment_tag / datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir
@@ -94,7 +93,7 @@ def main() -> None:
 
     config = load_config(args.config)
     config = apply_overrides(config, args.set)
-    validate_train_config(config)
+    validate_evaluator_train_config(config)
 
     seed = int(config["seed"])
     set_random_seed(seed)
@@ -105,11 +104,12 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    max_steps = int(config["train"]["max_steps"])
+    train_config = dict(config["evaluator"]["train"])
+    max_steps = int(train_config["max_steps"])
     if args.smoke:
-        max_steps = min(max_steps, int(config["train"].get("smoke_steps", 2)))
+        max_steps = min(max_steps, int(train_config.get("smoke_steps", 2)))
 
-    train_dataset = GraspDatasetSC(
+    train_dataset = EvaluatorDataset(
         manifest_path=str(config["data"]["manifest_path"]),
         split="train",
         cloud_type=str(config["data"]["cloud_type"]),
@@ -117,41 +117,42 @@ def main() -> None:
         n_points=int(config["data"]["n_points"]),
         joint_dim=int(config["model"]["common"]["joint_dim"]),
         seed=seed,
+        positive_probability=float(train_config.get("positive_probability", 0.5)),
     )
     train_loader = DataLoader(
         dataset=train_dataset,
         batch_sampler=DistinctObjectBatchSampler(
             dataset=train_dataset,
-            batch_size=int(config["train"]["batch_size"]),
+            batch_size=int(train_config["batch_size"]),
             num_steps=max_steps,
             seed=seed,
         ),
-        num_workers=int(config["train"].get("num_workers", 0)),
-        pin_memory=bool(config["train"].get("pin_memory", False)),
-        persistent_workers=bool(config["train"].get("persistent_workers", False))
-        if int(config["train"].get("num_workers", 0)) > 0
+        num_workers=int(train_config.get("num_workers", 0)),
+        pin_memory=bool(train_config.get("pin_memory", False)),
+        persistent_workers=bool(train_config.get("persistent_workers", False))
+        if int(train_config.get("num_workers", 0)) > 0
         else False,
     )
 
-    device = build_device(str(config["train"].get("device", "cpu")))
-    model = build_model(config).to(device)
+    device = build_device(str(train_config.get("device", "cpu")))
+    model = GraspEvaluator(config).to(device)
     optimizer = AdamW(
         model.parameters(),
-        lr=float(config["train"]["lr"]),
-        weight_decay=float(config["train"].get("weight_decay", 0.0)),
+        lr=float(train_config["lr"]),
+        weight_decay=float(train_config.get("weight_decay", 0.0)),
     )
 
     scheduler: CosineAnnealingLR | None = None
-    if "lr_min" in config["train"]:
+    if "lr_min" in train_config:
         scheduler = CosineAnnealingLR(
             optimizer,
             T_max=max_steps,
-            eta_min=float(config["train"]["lr_min"]),
+            eta_min=float(train_config["lr_min"]),
         )
 
-    log_every = int(config["train"].get("log_every", 50))
-    save_every = int(config["train"].get("save_every", 500))
-    grad_clip = float(config["train"].get("grad_clip", 10.0))
+    log_every = int(train_config.get("log_every", 50))
+    save_every = int(train_config.get("save_every", 500))
+    grad_clip = float(train_config.get("grad_clip", 10.0))
     last_checkpoint = run_dir / "last.ckpt"
     last_record: dict[str, float] = {}
 
@@ -170,17 +171,16 @@ def main() -> None:
         last_record = {
             key: float(value.detach().cpu().item())
             for key, value in outputs.items()
-            if torch.is_tensor(value)
+            if torch.is_tensor(value) and key not in {"logits", "score"}
         }
         if step % log_every == 0 or step == max_steps:
             LOGGER.info(
-                "[train_sc] step=%d loss=%.6f init=%.6f squeeze=%.6f joint=%.6f kld=%.6f",
+                "[train_evaluator] step=%d loss=%.6f acc=%.4f pos_acc=%.4f neg_acc=%.4f",
                 step,
                 last_record["loss"],
-                last_record["loss_init_pose"],
-                last_record["loss_squeeze_pose"],
-                last_record["loss_joint"],
-                last_record["loss_kld"],
+                last_record["accuracy"],
+                last_record["positive_accuracy"],
+                last_record["negative_accuracy"],
             )
         if step % save_every == 0 or step == max_steps:
             save_checkpoint(
@@ -203,10 +203,11 @@ def main() -> None:
         encoding="utf-8",
     )
     LOGGER.info(
-        "[train_sc] finished steps=%d checkpoint=%s loss=%.6f",
+        "[train_evaluator] finished steps=%d checkpoint=%s loss=%.6f acc=%.4f",
         max_steps,
         last_checkpoint,
         last_record.get("loss", float("nan")),
+        last_record.get("accuracy", float("nan")),
     )
 
 

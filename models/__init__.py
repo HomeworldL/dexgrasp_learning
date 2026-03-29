@@ -20,9 +20,9 @@ def build_model(config: dict[str, Any]) -> CVAESingleConditionModel:
     input_encoder_name = str(
         config.get("model", {}).get("input_encoder", {}).get("name", "pointnet")
     ).strip().lower()
-    if input_encoder_name != "pointnet":
+    if input_encoder_name not in {"pointnet", "bps"}:
         raise NotImplementedError(
             f"model.input_encoder.name={input_encoder_name} is reserved for future work. "
-            "The current mainline only implements pointnet."
+            "The current mainline implements pointnet and bps."
         )
     return CVAESingleConditionModel(config)

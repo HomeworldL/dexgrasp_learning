@@ -102,7 +102,9 @@ class GraspDatasetSC(Dataset):
                 "object_name": item.object_name,
                 "cloud_type": self.cloud_type,
                 "frame": self.frame,
-                "view_index": point_cloud_sample.view_index,
+                "view_index": (
+                    -1 if point_cloud_sample.view_index is None else point_cloud_sample.view_index
+                ),
                 "grasp_index": grasp_index,
             },
         }

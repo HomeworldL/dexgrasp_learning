@@ -65,7 +65,10 @@ object.xml
 convex_parts/*.obj
 grasp.h5
 grasp.npy
-partial_pc_warp/
+grasp_fail.h5
+grasp_fail.npy
+pc_warp/
+  global_pc.npy
   cam_in.npy
   cam_ex_XX.npy
   partial_pc_XX.npy
@@ -88,6 +91,8 @@ Internal sample representation must follow these rules:
 
 - Each object-scale item must have one required source file: `grasp.h5`
 - Each object-scale item must have one required derived file: `grasp.npy`
+- Each object-scale item must have one required failure source file: `grasp_fail.h5`
+- Each object-scale item must have one required failure derived file: `grasp_fail.npy`
 - `grasp.npy` must be converted from `grasp.h5` with numerically identical grasp values
 - Point clouds must stay outside `grasp.npy`
 - Partial-point-cloud render outputs are post-processing artifacts and remain separate from grasp arrays
@@ -105,8 +110,14 @@ Required `grasp.h5` schema:
 - `qpos_squeeze: [tx, ty, tz, qw, qx, qy, qz, q1...qN]`
 - `meta: {}`
 
+Required `grasp_fail.h5` schema summary:
+
+- `qpos_fail: [tx, ty, tz, qw, qx, qy, qz, q1...qN]`
+- `failure_stage: str`
+
 Required partial-point-cloud outputs:
 
+- `global_pc.npy`
 - `cam_in.npy`
 - `cam_ex_XX.npy`
 - `partial_pc_XX.npy`
@@ -124,7 +135,18 @@ Split rules:
 - Split by `object_name`, not by object-scale entry
 - All scales of the same object must stay in the same split
 - Default split is approximately `80/20` over unique objects, shuffled by config `seed`
-- An entry is valid only if `grasp.h5`, `grasp.npy`, and all required render outputs exist
+- An entry is valid only if positive grasp outputs, failure grasp outputs, and all required render outputs exist
+
+Split records should include:
+
+- `grasp_h5_path`
+- `grasp_npy_path`
+- `grasp_h5_fail_path`
+- `grasp_fail_npy_path`
+- `global_pc_path`
+- `partial_pc_path[]`
+- `partial_pc_cam_path[]`
+- `cam_ex_path[]`
 
 ## Data And Coordinate Conventions
 
@@ -249,7 +271,7 @@ When filling experiment results from user-provided metrics:
   - `model.input_encoder.name`
   - `model.prediction_structure.name`
   - `seed`
-  - `samples_per_object_scale`
+  - `sim.num_grasp_samples`
 - Keep experiment names unchanged per row, but reuse the same metrics and `summary_path` for duplicate effective configurations
 
 ## Commit And PR Rules

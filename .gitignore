@@ -210,3 +210,5 @@ __marimo__/
 docs/
 models_ref/
 assets/
+/outputs
+MUJOCO_LOG.TXT

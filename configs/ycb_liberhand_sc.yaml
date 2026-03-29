@@ -28,11 +28,20 @@ model:
       local_conv_hidden_dims: [64, 128, 256]
       global_mlp_hidden_dims: [256]
       activation: leaky_relu
+    bps:
+      basis_path: models_ref/DexDiffuser/models/basis_point_set.npy
+      feature_types: [dists]
+      mlp_hidden_dims: [512, 256]
+      activation: leaky_relu
+      bps_type: random_uniform
+      n_bps_points: 4096
+      radius: 1.0
+      n_dims: 3
     pointnet2: {}
     pct: {}
 
 hand:
-  xml_path: ./assets/hands/liberhand/liberhand_right.xml
+  xml_path: /home/ccs/repositories/dexgrasp_sample/assets/hands/liberhand/liberhand_right.xml
   prepared_joints:
     [
       0.0,
@@ -92,13 +101,13 @@ hand:
     hand_right_f54_end: [0.3, 0.2]
 
 train:
-  batch_size: 128
-  max_steps: 5000
+  batch_size: 32
+  max_steps: 10000
   smoke_steps: 2
   num_workers: 0
   pin_memory: false
   persistent_workers: false
-  device: cpu
+  device: cuda:0
   lr: 0.001
   lr_min: 0.00001
   weight_decay: 0.0001
@@ -111,11 +120,9 @@ train:
 sim:
   split: train
   ckpt_path: null
-  samples_per_object_scale: 5
-  num_grasp_samples: 16
+  num_grasp_samples: 5
   visualize: false
-  device: cpu
-  output_dir: outputs/sim_sc
+  device: cuda:0
   extforce:
     duration: 0.5
     trans_thresh: 0.05
@@ -127,3 +134,25 @@ evaluator:
   enabled: false
   ckpt_path: null
   topk: 5
+  model:
+    grasp_feat_dim: 128
+    hidden_features: 256
+    num_blocks: 2
+    dropout_probability: 0.0
+    use_batch_norm: false
+  train:
+    batch_size: 32
+    max_steps: 10000
+    smoke_steps: 2
+    positive_probability: 0.5
+    num_workers: 0
+    pin_memory: false
+    persistent_workers: false
+    device: cuda:0
+    lr: 0.001
+    lr_min: 0.00001
+    weight_decay: 0.0001
+    grad_clip: 10.0
+    log_every: 50
+    save_every: 500
+    output_dir: outputs/ycb_liberhand_sc/evaluator
