@@ -5,6 +5,7 @@ data:
   cloud_type: global
   frame: world
   n_points: 2048
+  point_sampling: random
 
 model:
   algorithm: cvae
@@ -101,18 +102,22 @@ hand:
     hand_right_f54_end: [0.3, 0.2]
 
 train:
-  batch_size: 32
-  max_steps: 10000
+  batch_size: 256
+  max_steps: 5000
   smoke_steps: 2
-  num_workers: 0
+  num_workers: 4
   pin_memory: false
   persistent_workers: false
   device: cuda:0
   lr: 0.001
-  lr_min: 0.00001
+  lr_min: 0.0001
   weight_decay: 0.0001
   grad_clip: 10.0
-  beta_kld: 0.001
+  loss_weights:
+    init_pose: 1.0
+    squeeze_pose: 1.0
+    joint: 5.0
+    kld: 0.001
   log_every: 50
   save_every: 500
   output_dir: outputs/ycb_liberhand_sc
@@ -123,12 +128,14 @@ sim:
   num_grasp_samples: 5
   visualize: false
   device: cuda:0
+  friction: [0.6, 0.2]
   extforce:
     duration: 0.5
     trans_thresh: 0.05
     angle_thresh: 10.0
     force_mag: 1.0
-    check_step: 50
+    check_steps: 50
+    close_steps: 100
 
 evaluator:
   enabled: false
@@ -142,9 +149,10 @@ evaluator:
     use_batch_norm: false
   train:
     batch_size: 32
-    max_steps: 10000
+    grasps_per_object: 8
+    max_steps: 5000
     smoke_steps: 2
-    positive_probability: 0.5
+    positive_ratio: 0.5
     num_workers: 0
     pin_memory: false
     persistent_workers: false
@@ -153,6 +161,9 @@ evaluator:
     lr_min: 0.00001
     weight_decay: 0.0001
     grad_clip: 10.0
+    loss_weights:
+      rank: 1.0
+      reg: 0.25
     log_every: 50
     save_every: 500
     output_dir: outputs/ycb_liberhand_sc/evaluator

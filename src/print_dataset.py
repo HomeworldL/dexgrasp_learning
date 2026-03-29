@@ -39,6 +39,7 @@ def main() -> None:
         n_points=int(config["data"]["n_points"]),
         joint_dim=int(config["model"]["common"]["joint_dim"]),
         seed=int(config["seed"]),
+        point_sampling=str(config["data"].get("point_sampling", "random")),
     )
     sample = dataset[args.index]
     print(

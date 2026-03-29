@@ -117,6 +117,7 @@ def main() -> None:
         n_points=int(config["data"]["n_points"]),
         joint_dim=int(config["model"]["common"]["joint_dim"]),
         seed=seed,
+        point_sampling=str(config["data"].get("point_sampling", "random")),
     )
     train_loader = DataLoader(
         dataset=train_dataset,

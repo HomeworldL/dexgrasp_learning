@@ -18,7 +18,14 @@ class CVAESingleConditionModel(BaseSCModel):
             raise NotImplementedError(
                 "Only model.algorithm=cvae is implemented in the current mainline."
             )
-        self.beta_kld = float(config["train"].get("beta_kld", 1e-3))
+        train_config = dict(config.get("train", {}))
+        loss_weights = dict(train_config.get("loss_weights", {}))
+        self.loss_weights = {
+            "init_pose": float(loss_weights.get("init_pose", 1.0)),
+            "squeeze_pose": float(loss_weights.get("squeeze_pose", 1.0)),
+            "joint": float(loss_weights.get("joint", 1.0)),
+            "kld": float(loss_weights.get("kld", train_config.get("beta_kld", 1e-3))),
+        }
         self.cvae = VAE(
             encoder_layer_sizes=[self.target_dim]
             + list(self.model_config.get("encoder_hidden_dims", [512, 256])),
@@ -47,7 +54,12 @@ class CVAESingleConditionModel(BaseSCModel):
         loss_kld = -0.5 * (
             1 + log_var - means.pow(2) - log_var.exp()
         ).sum(dim=-1).mean()
-        loss = loss_init_pose + loss_squeeze_pose + loss_joint + self.beta_kld * loss_kld
+        loss = (
+            self.loss_weights["init_pose"] * loss_init_pose
+            + self.loss_weights["squeeze_pose"] * loss_squeeze_pose
+            + self.loss_weights["joint"] * loss_joint
+            + self.loss_weights["kld"] * loss_kld
+        )
         return {
             "loss_init_pose": loss_init_pose,
             "loss_squeeze_pose": loss_squeeze_pose,

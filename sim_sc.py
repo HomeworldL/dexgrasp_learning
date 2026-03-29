@@ -93,6 +93,17 @@ def build_sim_output_dir(checkpoint_path: str) -> Path:
     return sim_dir
 
 
+def build_sim_runtime_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[float] | None]:
+    """构建 sim_sc 运行时使用的仿真参数。"""
+    sim_config = dict(config.get("sim", {}))
+    extforce_config = dict(sim_config.get("extforce", {}))
+    friction = sim_config.get("friction")
+    if friction is None:
+        return extforce_config, None
+    friction_values = np.asarray(friction, dtype=np.float32).reshape(-1)
+    return extforce_config, friction_values.tolist()
+
+
 def validate_evaluator_runtime(
     sim_config: dict[str, Any],
     generator_config: dict[str, Any],
@@ -168,6 +179,7 @@ def main() -> None:
     cloud_type = normalize_cloud_type(str(config["data"]["cloud_type"]))
     frame = normalize_frame(str(config["data"]["frame"]))
     n_points = int(config["data"]["n_points"])
+    point_sampling = str(config["data"].get("point_sampling", "random"))
     joint_dim = int(checkpoint_config["model"]["common"]["joint_dim"])
     prepared_joints = np.asarray(config["hand"]["prepared_joints"], dtype=np.float32)
     if prepared_joints.shape[0] != joint_dim:
@@ -182,7 +194,7 @@ def main() -> None:
             f"topk={evaluator_topk}, num_grasp_samples={num_grasp_samples}"
         )
     visualize = bool(args.visualize or config["sim"].get("visualize", False))
-    extforce_config = dict(config["sim"]["extforce"])
+    extforce_config, sim_friction = build_sim_runtime_config(config)
 
     summary_items: list[dict[str, Any]] = []
     total_generated_candidates = 0
@@ -200,6 +212,7 @@ def main() -> None:
             hand_xml_path=str(Path(config["hand"]["xml_path"]).expanduser().resolve()),
             target_body_params=dict(config["hand"]["target_body_params"]),
             hand_profile=dict(config["hand"].get("profile", {})),
+            friction_coef=(0.2, 0.2) if sim_friction is None else sim_friction,
             object_fixed=False,
             visualize=visualize,
         )
@@ -216,6 +229,7 @@ def main() -> None:
                 frame=frame,
                 n_points=n_points,
                 rng=rng,
+                point_sampling=point_sampling,
             )
             batch = {
                 "point_cloud": torch.tensor(
@@ -377,7 +391,10 @@ def main() -> None:
         "manifest_path": str(Path(config["data"]["manifest_path"]).expanduser().resolve()),
         "cloud_type": cloud_type,
         "frame": frame,
+        "point_sampling": point_sampling,
         "num_grasp_samples": num_grasp_samples,
+        "sim_friction": sim_friction,
+        "extforce": extforce_config,
         "evaluator_enabled": evaluator_enabled,
         "simulated_topk": (
             evaluator_topk if evaluator_enabled else num_grasp_samples

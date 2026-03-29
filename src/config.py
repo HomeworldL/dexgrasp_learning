@@ -74,6 +74,16 @@ def normalize_cloud_type(cloud_type: str) -> str:
     return cloud_name
 
 
+def normalize_point_sampling(point_sampling: str) -> str:
+    sampling_name = str(point_sampling).strip().lower()
+    if sampling_name not in {"fps", "random"}:
+        raise ValueError(
+            "Unsupported data.point_sampling="
+            f"'{point_sampling}'. Expected fps or random."
+        )
+    return sampling_name
+
+
 def get_required(config: dict[str, Any], dotted_key: str) -> Any:
     """读取必填配置项，缺失则立即报错。"""
     current: Any = config
@@ -86,12 +96,45 @@ def get_required(config: dict[str, Any], dotted_key: str) -> Any:
     return current
 
 
+def _validate_extforce_mapping(extforce: dict[str, Any], key_prefix: str) -> None:
+    for key in ("duration", "trans_thresh", "angle_thresh", "force_mag", "check_steps", "close_steps"):
+        if key not in extforce:
+            raise KeyError(f"Missing required config key: {key_prefix}.{key}")
+    if float(extforce["duration"]) <= 0.0:
+        raise ValueError(f"{key_prefix}.duration must be positive.")
+    if float(extforce["trans_thresh"]) < 0.0:
+        raise ValueError(f"{key_prefix}.trans_thresh must be non-negative.")
+    if float(extforce["angle_thresh"]) < 0.0:
+        raise ValueError(f"{key_prefix}.angle_thresh must be non-negative.")
+    if float(extforce["force_mag"]) < 0.0:
+        raise ValueError(f"{key_prefix}.force_mag must be non-negative.")
+    if int(extforce["check_steps"]) <= 0:
+        raise ValueError(f"{key_prefix}.check_steps must be positive.")
+    if int(extforce["close_steps"]) <= 0:
+        raise ValueError(f"{key_prefix}.close_steps must be positive.")
+
+
+def _validate_sim_runtime_config(sim_config: dict[str, Any]) -> None:
+    friction = sim_config.get("friction")
+    if friction is None:
+        return
+    friction_values = np.asarray(friction, dtype=np.float32).reshape(-1)
+    if friction_values.size not in {1, 2, 3}:
+        raise ValueError(
+            "sim.friction must have length 1, 2, or 3. "
+            f"Got {int(friction_values.size)}."
+        )
+    if np.any(friction_values < 0.0):
+        raise ValueError("sim.friction must be non-negative.")
+
+
 def validate_common_config(config: dict[str, Any]) -> None:
     """校验 train / sim 共用的必要字段。"""
     get_required(config, "seed")
     get_required(config, "data.manifest_path")
     normalize_cloud_type(get_required(config, "data.cloud_type"))
     normalize_frame(get_required(config, "data.frame"))
+    normalize_point_sampling(config.get("data", {}).get("point_sampling", "random"))
     get_required(config, "data.n_points")
     get_required(config, "model.algorithm")
     get_required(config, "model.input_encoder.name")
@@ -110,17 +153,28 @@ def validate_train_config(config: dict[str, Any]) -> None:
     get_required(config, "train.max_steps")
     get_required(config, "train.lr")
     get_required(config, "train.output_dir")
+    loss_weights = config.get("train", {}).get("loss_weights", {})
+    if loss_weights:
+        if not isinstance(loss_weights, dict):
+            raise ValueError("train.loss_weights must be a mapping when provided.")
+        for key in ("init_pose", "squeeze_pose", "joint", "kld"):
+            if key not in loss_weights:
+                continue
+            value = float(loss_weights[key])
+            if value < 0.0:
+                raise ValueError(f"train.loss_weights.{key} must be non-negative, got {value}.")
 
 
 def validate_sim_config(config: dict[str, Any]) -> None:
     """校验仿真所需配置。"""
     validate_common_config(config)
     get_required(config, "sim.num_grasp_samples")
-    get_required(config, "sim.extforce.duration")
-    get_required(config, "sim.extforce.trans_thresh")
-    get_required(config, "sim.extforce.angle_thresh")
-    get_required(config, "sim.extforce.force_mag")
-    get_required(config, "sim.extforce.check_step")
+    sim_config = get_required(config, "sim")
+    extforce = get_required(config, "sim.extforce")
+    if not isinstance(sim_config, dict) or not isinstance(extforce, dict):
+        raise ValueError("sim and sim.extforce must be mappings.")
+    _validate_extforce_mapping(extforce, key_prefix="sim.extforce")
+    _validate_sim_runtime_config(sim_config)
     if bool(config.get("evaluator", {}).get("enabled", False)):
         get_required(config, "evaluator.ckpt_path")
         get_required(config, "evaluator.topk")
@@ -132,6 +186,7 @@ def validate_evaluator_train_config(config: dict[str, Any]) -> None:
     get_required(config, "data.manifest_path")
     normalize_cloud_type(get_required(config, "data.cloud_type"))
     normalize_frame(get_required(config, "data.frame"))
+    normalize_point_sampling(config.get("data", {}).get("point_sampling", "random"))
     get_required(config, "data.n_points")
     get_required(config, "model.input_encoder.name")
     get_required(config, "model.common.point_feat_dim")
@@ -140,6 +195,7 @@ def validate_evaluator_train_config(config: dict[str, Any]) -> None:
     get_required(config, "evaluator.model.hidden_features")
     get_required(config, "evaluator.model.num_blocks")
     get_required(config, "evaluator.train.batch_size")
+    get_required(config, "evaluator.train.grasps_per_object")
     get_required(config, "evaluator.train.max_steps")
     get_required(config, "evaluator.train.lr")
     get_required(config, "evaluator.train.output_dir")

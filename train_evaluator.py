@@ -116,8 +116,15 @@ def main() -> None:
         frame=str(config["data"]["frame"]),
         n_points=int(config["data"]["n_points"]),
         joint_dim=int(config["model"]["common"]["joint_dim"]),
+        grasps_per_object=int(
+            train_config.get(
+                "grasps_per_object",
+                config["data"].get("grasps_per_object", 8),
+            )
+        ),
         seed=seed,
-        positive_probability=float(train_config.get("positive_probability", 0.5)),
+        positive_ratio=float(train_config.get("positive_ratio", 0.5)),
+        point_sampling=str(config["data"].get("point_sampling", "random")),
     )
     train_loader = DataLoader(
         dataset=train_dataset,
@@ -175,12 +182,13 @@ def main() -> None:
         }
         if step % log_every == 0 or step == max_steps:
             LOGGER.info(
-                "[train_evaluator] step=%d loss=%.6f acc=%.4f pos_acc=%.4f neg_acc=%.4f",
+                "[train_evaluator] step=%d loss=%.6f rank=%.6f reg=%.6f pair_acc=%.4f top1=%.4f",
                 step,
                 last_record["loss"],
-                last_record["accuracy"],
-                last_record["positive_accuracy"],
-                last_record["negative_accuracy"],
+                last_record["loss_rank"],
+                last_record["loss_reg"],
+                last_record["pairwise_accuracy"],
+                last_record["top1_success_rate"],
             )
         if step % save_every == 0 or step == max_steps:
             save_checkpoint(
@@ -203,11 +211,12 @@ def main() -> None:
         encoding="utf-8",
     )
     LOGGER.info(
-        "[train_evaluator] finished steps=%d checkpoint=%s loss=%.6f acc=%.4f",
+        "[train_evaluator] finished steps=%d checkpoint=%s loss=%.6f pair_acc=%.4f top1=%.4f",
         max_steps,
         last_checkpoint,
         last_record.get("loss", float("nan")),
-        last_record.get("accuracy", float("nan")),
+        last_record.get("pairwise_accuracy", float("nan")),
+        last_record.get("top1_success_rate", float("nan")),
     )
 
 

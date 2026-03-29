@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, Sampler
 
-from src.config import normalize_cloud_type, normalize_frame
+from src.config import normalize_cloud_type, normalize_frame, normalize_point_sampling
 from src.manifest import ManifestItem, load_manifest
 from src.transforms import (
     matrix_to_se3_log,
@@ -41,15 +41,16 @@ class GraspDatasetSC(Dataset):
         n_points: int,
         joint_dim: int,
         seed: int,
+        point_sampling: str = "random",
     ) -> None:
         self.dataset_root, self.items = load_manifest(manifest_path, split=split)
         self.split = split
         self.cloud_type = normalize_cloud_type(cloud_type)
         self.frame = normalize_frame(frame)
+        self.point_sampling = normalize_point_sampling(point_sampling)
         self.n_points = int(n_points)
         self.joint_dim = int(joint_dim)
         self.seed = int(seed)
-        self.object_name_to_indices = self._build_object_index()
         self._validate_manifest_items()
 
     def __len__(self) -> int:
@@ -74,6 +75,7 @@ class GraspDatasetSC(Dataset):
             frame=self.frame,
             n_points=self.n_points,
             rng=rng,
+            point_sampling=self.point_sampling,
         )
 
         init_matrix = qpos_to_matrix(qpos_init[grasp_index])
@@ -102,18 +104,13 @@ class GraspDatasetSC(Dataset):
                 "object_name": item.object_name,
                 "cloud_type": self.cloud_type,
                 "frame": self.frame,
+                "point_sampling": self.point_sampling,
                 "view_index": (
                     -1 if point_cloud_sample.view_index is None else point_cloud_sample.view_index
                 ),
                 "grasp_index": grasp_index,
             },
         }
-
-    def _build_object_index(self) -> dict[str, list[int]]:
-        mapping: dict[str, list[int]] = {}
-        for index, item in enumerate(self.items):
-            mapping.setdefault(item.object_name, []).append(index)
-        return mapping
 
     def _validate_manifest_items(self) -> None:
         for item in self.items:
@@ -143,7 +140,7 @@ class GraspDatasetSC(Dataset):
 
 
 class DistinctObjectBatchSampler(Sampler[list[tuple[int, int]]]):
-    """按 step 生成 batch，并保证 batch 内 object 不重复。"""
+    """按 step 生成 batch，采样单位为 object-scale 条目。"""
 
     def __init__(
         self,
@@ -156,25 +153,21 @@ class DistinctObjectBatchSampler(Sampler[list[tuple[int, int]]]):
         self.batch_size = int(batch_size)
         self.num_steps = int(num_steps)
         self.seed = int(seed)
-        self.object_names = sorted(dataset.object_name_to_indices)
-        if self.batch_size > len(self.object_names):
+        self.num_items = len(dataset)
+        if self.batch_size > self.num_items:
             raise ValueError(
-                "batch_size cannot exceed the number of unique objects. "
-                f"batch_size={self.batch_size}, unique_objects={len(self.object_names)}"
+                "batch_size cannot exceed the number of object-scale items. "
+                f"batch_size={self.batch_size}, num_items={self.num_items}"
             )
 
     def __iter__(self) -> Iterable[list[tuple[int, int]]]:
         rng = np.random.default_rng(self.seed)
         for _ in range(self.num_steps):
-            selected_objects = rng.choice(
-                self.object_names, size=self.batch_size, replace=False
-            )
+            selected_item_indices = rng.choice(self.num_items, size=self.batch_size, replace=False)
             batch: list[tuple[int, int]] = []
-            for object_name in selected_objects.tolist():
-                candidates = self.dataset.object_name_to_indices[object_name]
-                item_index = int(candidates[int(rng.integers(0, len(candidates)))])
+            for item_index in selected_item_indices.tolist():
                 sample_seed = int(rng.integers(0, 2**31 - 1))
-                batch.append((item_index, sample_seed))
+                batch.append((int(item_index), sample_seed))
             yield batch
 
     def __len__(self) -> int:
@@ -188,6 +181,7 @@ def load_conditioning_point_cloud(
     frame: str,
     n_points: int,
     rng: np.random.Generator,
+    point_sampling: str = "random",
 ) -> PointCloudSample:
     """根据模式读取点云条件。"""
     cloud_mode = normalize_cloud_type(cloud_type)
@@ -207,7 +201,12 @@ def load_conditioning_point_cloud(
             frame=frame_name,
         )
         return PointCloudSample(
-            point_cloud=sample_point_cloud(point_cloud, n_points=n_points, rng=rng),
+            point_cloud=sample_point_cloud(
+                point_cloud,
+                n_points=n_points,
+                rng=rng,
+                point_sampling=point_sampling,
+            ),
             view_index=view_index,
             cam_extrinsic=cam_extrinsic,
         )
@@ -227,7 +226,12 @@ def load_conditioning_point_cloud(
         )
         point_cloud_world = world_to_camera_points(point_cloud_world, cam_extrinsic)
     return PointCloudSample(
-        point_cloud=sample_point_cloud(point_cloud_world, n_points=n_points, rng=rng),
+        point_cloud=sample_point_cloud(
+            point_cloud_world,
+            n_points=n_points,
+            rng=rng,
+            point_sampling=point_sampling,
+        ),
         view_index=view_index,
         cam_extrinsic=cam_extrinsic,
     )

@@ -8,6 +8,8 @@ from pytorch3d.ops import sample_farthest_points
 from pytorch3d.transforms import se3_exp_map, se3_log_map
 from scipy.spatial.transform import Rotation
 
+from src.config import normalize_point_sampling
+
 
 IDENTITY_4X4: Final[np.ndarray] = np.eye(4, dtype=np.float32)
 
@@ -95,8 +97,9 @@ def sample_point_cloud(
     points: np.ndarray,
     n_points: int,
     rng: np.random.Generator,
+    point_sampling: str = "random",
 ) -> np.ndarray:
-    """按规则做 FPS 下采样或随机重复补齐。"""
+    """按配置做点云下采样；点数不足时统一随机重复补齐。"""
     xyz = np.asarray(points, dtype=np.float32)
     if xyz.ndim != 2 or xyz.shape[1] != 3:
         raise ValueError(f"point cloud must have shape [N, 3], got {xyz.shape}.")
@@ -105,7 +108,11 @@ def sample_point_cloud(
         raise ValueError("point cloud is empty.")
     if total_points == n_points:
         return xyz.copy()
+    sampling_mode = normalize_point_sampling(point_sampling)
     if total_points > n_points:
+        if sampling_mode == "random":
+            sampled_indices = rng.choice(total_points, size=int(n_points), replace=False)
+            return xyz[sampled_indices].astype(np.float32)
         sampled, _ = sample_farthest_points(
             torch.from_numpy(xyz).unsqueeze(0),
             K=int(n_points),

@@ -9,22 +9,41 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from src.config import normalize_cloud_type, normalize_frame
+from src.config import normalize_cloud_type, normalize_frame, normalize_point_sampling
 from src.grasp_dataset_sc import DistinctObjectBatchSampler, load_conditioning_point_cloud
 from src.manifest import ManifestItem, load_manifest
 from src.transforms import matrix_to_se3_log, qpos_to_matrix, world_to_camera_pose
 
 
+NEGATIVE_STAGE_ORDER = (
+    "prepared_contact",
+    "insufficient_contact",
+    "extforce_failure",
+)
+STAGE_TO_LABEL = {
+    "prepared_contact": 0,
+    "insufficient_contact": 1,
+    "extforce_failure": 2,
+    "positive": 3,
+}
+STAGE_TO_SCORE = {
+    "prepared_contact": 0.0,
+    "insufficient_contact": 0.08,
+    "extforce_failure": 0.25,
+    "positive": 1.0,
+}
+
+
 @dataclass(frozen=True)
 class EvaluatorSampleInfo:
-    """缓存每个 object-scale 的正负样本数量。"""
+    """缓存每个 object-scale 的正样本数量与负样本分档索引。"""
 
     positive_count: int
-    negative_count: int
+    negative_indices_by_stage: dict[str, np.ndarray]
 
 
 class EvaluatorDataset(Dataset):
-    """抓取评估网络数据集，使用正负抓取做二分类。"""
+    """抓取评估网络数据集，输出一个 observation 对应的 K 个抓取及其档位标签。"""
 
     def __init__(
         self,
@@ -34,22 +53,27 @@ class EvaluatorDataset(Dataset):
         frame: str,
         n_points: int,
         joint_dim: int,
+        grasps_per_object: int,
         seed: int,
-        positive_probability: float = 0.5,
+        positive_ratio: float = 0.5,
+        point_sampling: str = "random",
     ) -> None:
         self.dataset_root, self.items = load_manifest(manifest_path, split=split)
         self.split = split
         self.cloud_type = normalize_cloud_type(cloud_type)
         self.frame = normalize_frame(frame)
+        self.point_sampling = normalize_point_sampling(point_sampling)
         self.n_points = int(n_points)
         self.joint_dim = int(joint_dim)
+        self.grasps_per_object = int(grasps_per_object)
         self.seed = int(seed)
-        self.positive_probability = float(positive_probability)
-        if not 0.0 < self.positive_probability < 1.0:
+        self.positive_ratio = float(positive_ratio)
+        if self.grasps_per_object < 2:
             raise ValueError(
-                "positive_probability must be in (0, 1), "
-                f"got {self.positive_probability}."
+                f"grasps_per_object must be at least 2 for evaluator ranking, got {self.grasps_per_object}."
             )
+        if not 0.0 < self.positive_ratio < 1.0:
+            raise ValueError(f"positive_ratio must be in (0, 1), got {self.positive_ratio}.")
         self.object_name_to_indices = self._build_object_index()
         self.sample_info = self._build_sample_info()
 
@@ -68,55 +92,72 @@ class EvaluatorDataset(Dataset):
             frame=self.frame,
             n_points=self.n_points,
             rng=rng,
+            point_sampling=self.point_sampling,
         )
 
-        use_positive = bool(rng.random() < self.positive_probability)
-        if use_positive:
-            qpos, grasp_index = _load_positive_qpos(
-                dataset_root=self.dataset_root,
-                item=item,
-                joint_dim=self.joint_dim,
-                sample_count=sample_info.positive_count,
-                rng=rng,
-            )
-            label = 1.0
-            failure_stage = "positive"
-        else:
-            qpos, grasp_index, failure_stage = _load_negative_qpos(
-                dataset_root=self.dataset_root,
-                item=item,
-                joint_dim=self.joint_dim,
-                sample_count=sample_info.negative_count,
-                rng=rng,
-            )
-            label = 0.0
+        num_positive, num_negative = _split_group_counts(
+            grasps_per_object=self.grasps_per_object,
+            positive_ratio=self.positive_ratio,
+        )
+        positive_rows = _sample_positive_rows(
+            dataset_root=self.dataset_root,
+            item=item,
+            joint_dim=self.joint_dim,
+            sample_count=sample_info.positive_count,
+            count=num_positive,
+            rng=rng,
+        )
+        negative_rows = _sample_negative_rows(
+            dataset_root=self.dataset_root,
+            item=item,
+            joint_dim=self.joint_dim,
+            negative_indices_by_stage=sample_info.negative_indices_by_stage,
+            count=num_negative,
+            rng=rng,
+        )
+        rows = positive_rows + negative_rows
+        permutation = rng.permutation(len(rows))
+        rows = [rows[int(index)] for index in permutation.tolist()]
 
-        grasp_matrix = qpos_to_matrix(qpos)
-        if self.frame == "camera":
-            if point_cloud_sample.cam_extrinsic is None:
-                raise ValueError(
-                    f"{item.object_scale_key} is missing camera extrinsic for camera mode."
+        grasp_pose_list: list[np.ndarray] = []
+        grasp_joint_list: list[np.ndarray] = []
+        stage_labels: list[int] = []
+        target_scores: list[float] = []
+        grasp_indices: list[int] = []
+
+        for row in rows:
+            grasp_matrix = qpos_to_matrix(row.qpos)
+            if self.frame == "camera":
+                if point_cloud_sample.cam_extrinsic is None:
+                    raise ValueError(
+                        f"{item.object_scale_key} is missing camera extrinsic for camera mode."
+                    )
+                grasp_matrix = world_to_camera_pose(
+                    grasp_matrix, point_cloud_sample.cam_extrinsic
                 )
-            grasp_matrix = world_to_camera_pose(grasp_matrix, point_cloud_sample.cam_extrinsic)
+            grasp_pose_list.append(matrix_to_se3_log(grasp_matrix))
+            grasp_joint_list.append(row.qpos[7 : 7 + self.joint_dim].astype(np.float32))
+            stage_labels.append(STAGE_TO_LABEL[row.stage_name])
+            target_scores.append(STAGE_TO_SCORE[row.stage_name])
+            grasp_indices.append(row.grasp_index)
 
         return {
             "point_cloud": torch.tensor(point_cloud_sample.point_cloud, dtype=torch.float32),
-            "grasp_pose": torch.tensor(matrix_to_se3_log(grasp_matrix), dtype=torch.float32),
-            "grasp_joint": torch.tensor(
-                qpos[7 : 7 + self.joint_dim], dtype=torch.float32
-            ),
-            "label": torch.tensor(label, dtype=torch.float32),
+            "grasp_pose": torch.tensor(np.stack(grasp_pose_list, axis=0), dtype=torch.float32),
+            "grasp_joint": torch.tensor(np.stack(grasp_joint_list, axis=0), dtype=torch.float32),
+            "stage_label": torch.tensor(stage_labels, dtype=torch.long),
+            "target_score": torch.tensor(target_scores, dtype=torch.float32),
+            "grasp_indices": torch.tensor(grasp_indices, dtype=torch.long),
             "meta": {
                 "object_scale_key": item.object_scale_key,
                 "object_name": item.object_name,
                 "cloud_type": self.cloud_type,
                 "frame": self.frame,
+                "point_sampling": self.point_sampling,
                 "view_index": (
                     -1 if point_cloud_sample.view_index is None else point_cloud_sample.view_index
                 ),
-                "grasp_index": grasp_index,
-                "label": int(label),
-                "failure_stage": failure_stage,
+                "num_grasps": self.grasps_per_object,
             },
         }
 
@@ -139,6 +180,15 @@ class EvaluatorDataset(Dataset):
         return sample_info
 
 
+@dataclass(frozen=True)
+class EvaluatorRow:
+    """组内一个抓取候选。"""
+
+    qpos: np.ndarray
+    grasp_index: int
+    stage_name: str
+
+
 def _inspect_sample_info(
     dataset_root: Path,
     item: ManifestItem,
@@ -157,6 +207,7 @@ def _inspect_sample_info(
         qpos_squeeze = handle["qpos_squeeze"][:].astype(np.float32)
     with h5py.File(negative_path, "r") as handle:
         qpos_fail = handle["qpos_fail"][:].astype(np.float32)
+        failure_stage = [_decode_failure_stage(raw) for raw in handle["failure_stage"][:]]
 
     _validate_qpos_array(qpos_squeeze, joint_dim=joint_dim, name="qpos_squeeze")
     _validate_qpos_array(qpos_fail, joint_dim=joint_dim, name="qpos_fail")
@@ -164,41 +215,97 @@ def _inspect_sample_info(
         raise ValueError(f"{item.object_scale_key} has no positive evaluator samples.")
     if qpos_fail.shape[0] <= 0:
         raise ValueError(f"{item.object_scale_key} has no negative evaluator samples.")
+
+    negative_indices_by_stage: dict[str, np.ndarray] = {}
+    for stage_name in NEGATIVE_STAGE_ORDER:
+        indices = [index for index, value in enumerate(failure_stage) if value == stage_name]
+        negative_indices_by_stage[stage_name] = np.asarray(indices, dtype=np.int64)
+    if sum(int(values.shape[0]) for values in negative_indices_by_stage.values()) <= 0:
+        raise ValueError(f"{item.object_scale_key} has no recognized negative failure stages.")
+
     return EvaluatorSampleInfo(
         positive_count=int(qpos_squeeze.shape[0]),
-        negative_count=int(qpos_fail.shape[0]),
+        negative_indices_by_stage=negative_indices_by_stage,
     )
 
 
-def _load_positive_qpos(
+def _split_group_counts(
+    grasps_per_object: int,
+    positive_ratio: float,
+) -> tuple[int, int]:
+    num_positive = int(round(grasps_per_object * positive_ratio))
+    num_positive = min(max(num_positive, 1), grasps_per_object - 1)
+    num_negative = grasps_per_object - num_positive
+    return num_positive, num_negative
+
+
+def _sample_positive_rows(
     dataset_root: Path,
     item: ManifestItem,
     joint_dim: int,
     sample_count: int,
+    count: int,
     rng: np.random.Generator,
-) -> tuple[np.ndarray, int]:
-    grasp_index = int(rng.integers(0, sample_count))
+) -> list[EvaluatorRow]:
+    grasp_indices = rng.choice(sample_count, size=count, replace=sample_count < count).astype(np.int64)
+    rows: list[EvaluatorRow] = []
     with h5py.File(dataset_root / item.grasp_h5_path, "r") as handle:
-        qpos = handle["qpos_squeeze"][grasp_index].astype(np.float32)
-    _validate_qpos_vector(qpos, joint_dim=joint_dim, name="qpos_squeeze")
-    return qpos, grasp_index
+        for grasp_index in grasp_indices.tolist():
+            qpos = handle["qpos_squeeze"][int(grasp_index)].astype(np.float32)
+            _validate_qpos_vector(qpos, joint_dim=joint_dim, name="qpos_squeeze")
+            rows.append(
+                EvaluatorRow(
+                    qpos=qpos,
+                    grasp_index=int(grasp_index),
+                    stage_name="positive",
+                )
+            )
+    return rows
 
 
-def _load_negative_qpos(
+def _sample_negative_rows(
     dataset_root: Path,
     item: ManifestItem,
     joint_dim: int,
-    sample_count: int,
+    negative_indices_by_stage: dict[str, np.ndarray],
+    count: int,
     rng: np.random.Generator,
-) -> tuple[np.ndarray, int, str]:
+) -> list[EvaluatorRow]:
     if item.grasp_h5_fail_path is None:
         raise KeyError(f"{item.object_scale_key} is missing grasp_h5_fail_path.")
-    grasp_index = int(rng.integers(0, sample_count))
+    available_stages = [
+        stage_name
+        for stage_name in NEGATIVE_STAGE_ORDER
+        if negative_indices_by_stage[stage_name].shape[0] > 0
+    ]
+    if not available_stages:
+        raise ValueError(f"{item.object_scale_key} has no negative stages for evaluator.")
+
+    selected_stages: list[str] = []
+    stage_cycle = available_stages.copy()
+    while len(selected_stages) < count:
+        rng.shuffle(stage_cycle)
+        for stage_name in stage_cycle:
+            selected_stages.append(stage_name)
+            if len(selected_stages) == count:
+                break
+
+    rows: list[EvaluatorRow] = []
     with h5py.File(dataset_root / item.grasp_h5_fail_path, "r") as handle:
-        qpos = handle["qpos_fail"][grasp_index].astype(np.float32)
-        failure_stage = _decode_failure_stage(handle["failure_stage"][grasp_index])
-    _validate_qpos_vector(qpos, joint_dim=joint_dim, name="qpos_fail")
-    return qpos, grasp_index, failure_stage
+        for stage_name in selected_stages:
+            candidate_indices = negative_indices_by_stage[stage_name]
+            chosen_position = int(rng.integers(0, candidate_indices.shape[0]))
+            grasp_index = int(candidate_indices[chosen_position])
+            qpos = handle["qpos_fail"][grasp_index].astype(np.float32)
+            _validate_qpos_vector(qpos, joint_dim=joint_dim, name="qpos_fail")
+            rows.append(
+                EvaluatorRow(
+                    qpos=qpos,
+                    grasp_index=grasp_index,
+                    stage_name=stage_name,
+                )
+            )
+    return rows
 
 
 def _validate_qpos_array(array: np.ndarray, joint_dim: int, name: str) -> None:
