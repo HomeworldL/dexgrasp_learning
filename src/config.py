@@ -140,10 +140,49 @@ def validate_common_config(config: dict[str, Any]) -> None:
     get_required(config, "model.input_encoder.name")
     get_required(config, "model.common.point_feat_dim")
     get_required(config, "model.common.joint_dim")
-    get_required(config, "model.algorithms.cvae.latent_dim")
+    _validate_algorithm_config(config)
     get_required(config, "hand.xml_path")
     get_required(config, "hand.prepared_joints")
     get_required(config, "hand.target_body_params")
+
+
+def _validate_algorithm_config(config: dict[str, Any]) -> None:
+    algorithm = str(get_required(config, "model.algorithm")).strip().lower()
+    if algorithm == "cvae":
+        get_required(config, "model.algorithms.cvae.latent_dim")
+        return
+    if algorithm == "dexdiffuser":
+        get_required(config, "model.algorithms.dexdiffuser.condition.context_dim")
+        get_required(config, "model.algorithms.dexdiffuser.unet.d_model")
+        get_required(config, "model.algorithms.dexdiffuser.diffusion.steps")
+        get_required(config, "model.algorithms.dexdiffuser.diffusion.schedule.beta")
+        get_required(config, "model.algorithms.dexdiffuser.diffusion.schedule.beta_schedule")
+        input_encoder_name = str(get_required(config, "model.input_encoder.name")).strip().lower()
+        if input_encoder_name == "pointnet":
+            get_required(
+                config,
+                "model.algorithms.dexdiffuser.condition.pointnet.num_condition_tokens",
+            )
+            return
+        if input_encoder_name == "bps":
+            get_required(
+                config,
+                "model.algorithms.dexdiffuser.condition.bps.num_condition_tokens",
+            )
+            return
+        raise NotImplementedError(
+            f"DexDiffuser currently supports pointnet and bps, got {input_encoder_name}."
+        )
+    if algorithm == "udgm":
+        get_required(config, "model.algorithms.udgm.condition_dim")
+        get_required(config, "model.algorithms.udgm.flow.hidden_dim")
+        get_required(config, "model.algorithms.udgm.flow.num_layers")
+        get_required(config, "model.algorithms.udgm.flow.num_blocks_per_layer")
+        return
+    raise NotImplementedError(
+        f"model.algorithm={algorithm} is reserved for future work. "
+        "The current mainline implements cvae, dexdiffuser, and udgm."
+    )
 
 
 def validate_train_config(config: dict[str, Any]) -> None:

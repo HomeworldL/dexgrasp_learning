@@ -29,7 +29,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train the single-condition PointNet + CVAE model.")
+    parser = argparse.ArgumentParser(description="Train the unified single-condition grasp generator.")
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument(
         "--set",
@@ -174,15 +174,8 @@ def main() -> None:
             if torch.is_tensor(value)
         }
         if step % log_every == 0 or step == max_steps:
-            LOGGER.info(
-                "[train_sc] step=%d loss=%.6f init=%.6f squeeze=%.6f joint=%.6f kld=%.6f",
-                step,
-                last_record["loss"],
-                last_record["loss_init_pose"],
-                last_record["loss_squeeze_pose"],
-                last_record["loss_joint"],
-                last_record["loss_kld"],
-            )
+            metric_parts = [f"{key}={value:.6f}" for key, value in sorted(last_record.items())]
+            LOGGER.info("[train_sc] step=%d %s", step, " ".join(metric_parts))
         if step % save_every == 0 or step == max_steps:
             save_checkpoint(
                 path=last_checkpoint,

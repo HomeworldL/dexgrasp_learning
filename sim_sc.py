@@ -31,7 +31,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Simulate the single-condition PointNet + CVAE model.")
+    parser = argparse.ArgumentParser(description="Simulate the unified single-condition grasp generator.")
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument(
         "--set",

@@ -88,9 +88,16 @@ class BaseSCModel(nn.Module):
 
         self.input_encoder = build_input_encoder(self.model_config)
 
+    def encode_condition_features(
+        self,
+        batch: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """返回全局条件特征及 backbone 原始特征。"""
+        return self.input_encoder(batch["point_cloud"])
+
     def encode_condition(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         """提取点云条件特征。"""
-        condition, _ = self.input_encoder(batch["point_cloud"])
+        condition, _ = self.encode_condition_features(batch)
         return condition
 
     def target_vector(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
@@ -105,7 +112,9 @@ class BaseSCModel(nn.Module):
         init_end = self.init_pose_dim
         squeeze_end = init_end + self.squeeze_pose_dim
         return {
-            "pred_init_pose": prediction[:, :init_end],
-            "pred_squeeze_pose": prediction[:, init_end:squeeze_end],
-            "pred_squeeze_joint": prediction[:, squeeze_end : squeeze_end + self.joint_dim],
+            "pred_init_pose": prediction[..., :init_end],
+            "pred_squeeze_pose": prediction[..., init_end:squeeze_end],
+            "pred_squeeze_joint": prediction[
+                ..., squeeze_end : squeeze_end + self.joint_dim
+            ],
         }

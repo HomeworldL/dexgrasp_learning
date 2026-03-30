@@ -21,7 +21,50 @@ model:
       latent_dim: 64
       encoder_hidden_dims: [512, 256]
       decoder_hidden_dims: [256, 256]
-    diffusion: {}
+    udgm:
+      condition_dim: 256
+      target_normalization:
+        enabled: false
+      condition:
+        hidden_dims: [256]
+        activation: leaky_relu
+      flow:
+        hidden_dim: 256
+        num_layers: 8
+        num_blocks_per_layer: 2
+        scale_clamp: 2.0
+        activation: leaky_relu
+    dexdiffuser:
+      target_normalization:
+        enabled: false
+      condition:
+        context_dim: 512
+        append_global_token: true
+        token_sampling: random
+        pointnet:
+          num_condition_tokens: 128
+        bps:
+          num_condition_tokens: 128
+          feature_types: [dists]
+      unet:
+        d_model: 512
+        time_embed_mult: 2
+        nblocks: 4
+        resblock_dropout: 0.0
+        transformer_num_heads: 8
+        transformer_dim_head: 64
+        transformer_dropout: 0.1
+        transformer_depth: 1
+        transformer_mult_ff: 2
+        use_position_embedding: false
+      diffusion:
+        steps: 100
+        rand_t_type: half
+        loss_type: l2
+        schedule:
+          beta: [0.0001, 0.01]
+          beta_schedule: linear
+          s: 0.008
     flow: {}
   input_encoders:
     pointnet:
@@ -103,7 +146,7 @@ hand:
 
 train:
   batch_size: 256
-  max_steps: 5000
+  max_steps: 20000
   smoke_steps: 2
   num_workers: 4
   pin_memory: false
@@ -125,7 +168,7 @@ train:
 sim:
   split: train
   ckpt_path: null
-  num_grasp_samples: 5
+  num_grasp_samples: 20
   visualize: false
   device: cuda:0
   friction: [0.6, 0.2]
