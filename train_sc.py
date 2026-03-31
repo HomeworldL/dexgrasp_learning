@@ -88,6 +88,51 @@ def save_checkpoint(
     )
 
 
+def load_checkpoint_payload(path: str | Path) -> dict[str, Any]:
+    checkpoint_path = Path(path).expanduser().resolve()
+    if not checkpoint_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+    payload = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Checkpoint must be a mapping: {checkpoint_path}")
+    return payload
+
+
+def resolve_initial_step(
+    configured_initial_step: int | None,
+    checkpoint_step: int | None,
+) -> int:
+    if configured_initial_step is None:
+        return 0 if checkpoint_step is None else int(checkpoint_step)
+    resolved = int(configured_initial_step)
+    if resolved < 0:
+        raise ValueError(f"train.initial_step must be non-negative, got {resolved}.")
+    if checkpoint_step is not None and resolved != int(checkpoint_step):
+        raise ValueError(
+            "train.initial_step does not match checkpoint step: "
+            f"{resolved} != {int(checkpoint_step)}."
+        )
+    return resolved
+
+
+def initialize_model_from_checkpoint(
+    model: torch.nn.Module,
+    init_ckpt_path: str | None,
+    configured_initial_step: int | None,
+) -> tuple[int, str | None]:
+    if init_ckpt_path is None:
+        return resolve_initial_step(configured_initial_step, checkpoint_step=None), None
+
+    checkpoint_path = Path(init_ckpt_path).expanduser().resolve()
+    payload = load_checkpoint_payload(checkpoint_path)
+    state_dict = payload.get("model", payload)
+    if not isinstance(state_dict, dict):
+        raise ValueError(f"Checkpoint model state must be a mapping: {checkpoint_path}")
+    model.load_state_dict(state_dict)
+    initial_step = resolve_initial_step(configured_initial_step, payload.get("step"))
+    return initial_step, str(checkpoint_path)
+
+
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -109,6 +154,26 @@ def main() -> None:
     if args.smoke:
         max_steps = min(max_steps, int(config["train"].get("smoke_steps", 2)))
 
+    device = build_device(str(config["train"].get("device", "cpu")))
+    model = build_model(config).to(device)
+    initial_step, init_ckpt_path = initialize_model_from_checkpoint(
+        model=model,
+        init_ckpt_path=config["train"].get("init_ckpt_path"),
+        configured_initial_step=config["train"].get("initial_step"),
+    )
+    if initial_step >= max_steps:
+        raise ValueError(
+            f"train.max_steps={max_steps} must be greater than initial_step={initial_step}."
+        )
+    remaining_steps = max_steps - initial_step
+    if init_ckpt_path is not None:
+        LOGGER.info(
+            "[train_sc] initializing model from checkpoint=%s initial_step=%d target_step=%d",
+            init_ckpt_path,
+            initial_step,
+            max_steps,
+        )
+
     train_dataset = GraspDatasetSC(
         manifest_path=str(config["data"]["manifest_path"]),
         split="train",
@@ -124,7 +189,7 @@ def main() -> None:
         batch_sampler=DistinctObjectBatchSampler(
             dataset=train_dataset,
             batch_size=int(config["train"]["batch_size"]),
-            num_steps=max_steps,
+            num_steps=remaining_steps,
             seed=seed,
         ),
         num_workers=int(config["train"].get("num_workers", 0)),
@@ -134,8 +199,6 @@ def main() -> None:
         else False,
     )
 
-    device = build_device(str(config["train"].get("device", "cpu")))
-    model = build_model(config).to(device)
     optimizer = AdamW(
         model.parameters(),
         lr=float(config["train"]["lr"]),
@@ -146,7 +209,7 @@ def main() -> None:
     if "lr_min" in config["train"]:
         scheduler = CosineAnnealingLR(
             optimizer,
-            T_max=max_steps,
+            T_max=remaining_steps,
             eta_min=float(config["train"]["lr_min"]),
         )
 
@@ -157,7 +220,7 @@ def main() -> None:
     last_record: dict[str, float] = {}
 
     model.train()
-    for step, batch in enumerate(train_loader, start=1):
+    for step, batch in enumerate(train_loader, start=initial_step + 1):
         batch = to_device(batch, device)
         optimizer.zero_grad(set_to_none=True)
         outputs = model(batch)
@@ -189,6 +252,8 @@ def main() -> None:
     summary = {
         "run_dir": str(run_dir),
         "max_steps": max_steps,
+        "initial_step": initial_step,
+        "init_ckpt_path": init_ckpt_path,
         "last_checkpoint": str(last_checkpoint),
         "last_record": last_record,
     }

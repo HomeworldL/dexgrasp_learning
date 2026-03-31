@@ -192,6 +192,14 @@ def validate_train_config(config: dict[str, Any]) -> None:
     get_required(config, "train.max_steps")
     get_required(config, "train.lr")
     get_required(config, "train.output_dir")
+    init_ckpt_path = config.get("train", {}).get("init_ckpt_path")
+    if init_ckpt_path is not None:
+        checkpoint_path = Path(str(init_ckpt_path)).expanduser().resolve()
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"train.init_ckpt_path not found: {checkpoint_path}")
+    initial_step = config.get("train", {}).get("initial_step")
+    if initial_step is not None and int(initial_step) < 0:
+        raise ValueError("train.initial_step must be non-negative when provided.")
     loss_weights = config.get("train", {}).get("loss_weights", {})
     if loss_weights:
         if not isinstance(loss_weights, dict):

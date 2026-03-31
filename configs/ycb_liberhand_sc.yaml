@@ -147,6 +147,8 @@ hand:
 train:
   batch_size: 256
   max_steps: 20000
+  init_ckpt_path: null
+  initial_step: null
   smoke_steps: 2
   num_workers: 4
   pin_memory: false
