@@ -21,7 +21,7 @@ from src.config import (
     set_random_seed,
     validate_sim_config,
 )
-from src.grasp_dataset_sc import load_conditioning_point_cloud
+from src.grasp_dataset import load_conditioning_point_cloud
 from src.manifest import load_manifest
 from src.mj_ho import MjHO
 from src.transforms import camera_to_world_pose, matrix_to_qpos, se3_log_to_matrix
@@ -31,7 +31,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Simulate the unified single-condition grasp generator.")
+    parser = argparse.ArgumentParser(description="Simulate the unified point-cloud-conditioned grasp generator.")
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument(
         "--set",
@@ -97,8 +97,21 @@ def build_sim_output_dir(
     return sim_dir
 
 
+def build_sim_summary_path(
+    checkpoint_path: str,
+    split: str,
+    evaluator_enabled: bool = False,
+) -> Path:
+    sim_dir = build_sim_output_dir(
+        checkpoint_path=checkpoint_path,
+        evaluator_enabled=evaluator_enabled,
+    )
+    split_name = str(split).strip().lower()
+    return sim_dir / f"sim_summary_{split_name}.json"
+
+
 def build_sim_runtime_config(config: dict[str, Any]) -> tuple[dict[str, Any], list[float] | None]:
-    """构建 sim_sc 运行时使用的仿真参数。"""
+    """构建 sim 运行时使用的仿真参数。"""
     sim_config = dict(config.get("sim", {}))
     extforce_config = dict(sim_config.get("extforce", {}))
     friction = sim_config.get("friction")
@@ -372,7 +385,7 @@ def main() -> None:
             }
         )
         LOGGER.info(
-            "[sim_sc] item=%d/%d object_scale_key=%s grasp=%s success=%s",
+            "[sim] item=%d/%d object_scale_key=%s grasp=%s success=%s",
             item_index + 1,
             len(manifest_items),
             item.object_scale_key,
@@ -380,7 +393,7 @@ def main() -> None:
             object_success,
         )
         LOGGER.info(
-            "[sim_sc] generated=%d selected=%d sampling_time=%.4fs scoring_time=%.4fs simulation_time=%.4fs",
+            "[sim] generated=%d selected=%d sampling_time=%.4fs scoring_time=%.4fs simulation_time=%.4fs",
             num_grasp_samples,
             object_total_candidates,
             attempt_records[0]["sampling_time_sec"],
@@ -392,6 +405,7 @@ def main() -> None:
         str(checkpoint_path),
         evaluator_enabled=evaluator_enabled,
     )
+    split_name = str(config["sim"].get("split", "train")).strip().lower()
     successful_objects = int(sum(1 for item in summary_items if item["success"]))
     summary = {
         "checkpoint_path": str(Path(checkpoint_path).expanduser().resolve()),
@@ -434,10 +448,14 @@ def main() -> None:
         json.dumps(config, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    summary_path = run_dir / "sim_summary.json"
+    summary_path = build_sim_summary_path(
+        str(checkpoint_path),
+        split=split_name,
+        evaluator_enabled=evaluator_enabled,
+    )
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
     LOGGER.info(
-        "[sim_sc] finished GSR=%.6f OSR=%.6f summary=%s",
+        "[sim] finished GSR=%.6f OSR=%.6f summary=%s",
         summary["GSR"],
         summary["OSR"],
         summary_path,

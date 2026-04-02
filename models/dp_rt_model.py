@@ -4,24 +4,25 @@ from typing import Any
 
 import torch
 
-from models.base_sc import BaseSCModel
+from models.base_model import BaseModel
 from models.dp import DPDiffusionRTHead
 
 
-class DPRTScModel(BaseSCModel):
+class DPRTModel(BaseModel):
     """DexLearn DiffusionRT_MLPRTJ 风格的两阶段轻量 diffusion 生成器。"""
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         if self.algorithm != "dp_rt":
-            raise NotImplementedError("DPRTScModel only supports model.algorithm=dp_rt.")
+            raise NotImplementedError("DPRTModel only supports model.algorithm=dp_rt.")
         algorithm_config = dict(self.model_config)
         rms_config = dict(algorithm_config.get("rms", {}))
         regression_config = dict(algorithm_config.get("regression", {}))
+        algorithm_loss_weights = dict(algorithm_config.get("loss_weights", {}))
         self.loss_weights = {
-            "diffusion": float(dict(algorithm_config.get("loss_weights", {})).get("diffusion", 1.0)),
-            "init_pose": float(dict(algorithm_config.get("loss_weights", {})).get("init_pose", 1.0)),
-            "joint": float(dict(algorithm_config.get("loss_weights", {})).get("joint", 5.0)),
+            "diffusion": float(algorithm_loss_weights.get("diffusion", 1.0)),
+            "init_pose": float(algorithm_loss_weights.get("init_pose", 1.0)),
+            "joint": float(algorithm_loss_weights.get("joint", 5.0)),
         }
         self.head = DPDiffusionRTHead(
             condition_dim=self.point_feat_dim,
@@ -49,19 +50,12 @@ class DPRTScModel(BaseSCModel):
         )
         return outputs
 
-    def infer(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        sampled = self.sample(batch=batch, num_samples=1)
-        return {
-            "pred_init_pose": sampled["pred_init_pose"][:, 0, :],
-            "pred_squeeze_pose": sampled["pred_squeeze_pose"][:, 0, :],
-            "pred_squeeze_joint": sampled["pred_squeeze_joint"][:, 0, :],
-        }
-
     def sample(
         self,
         batch: dict[str, torch.Tensor],
         num_samples: int,
     ) -> dict[str, torch.Tensor]:
+        self._validate_num_samples(num_samples)
         condition = self.encode_condition(batch)
         prediction, _ = self.head.sample(condition=condition, num_samples=num_samples)
         pred_init_pose, pred_squeeze_pose, pred_squeeze_joint = prediction

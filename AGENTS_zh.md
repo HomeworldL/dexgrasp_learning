@@ -6,7 +6,7 @@
 
 当前主线目标为：
 
-1. 先做单条件抓取生成，输入使用全局点云。
+1. 先做点云条件抓取生成，输入使用全局点云。
 2. 先在 world 系验证抓取成功率。
 3. 再切换到 camera 系，对比成功率。
 4. 最后推进到局部点云。
@@ -22,12 +22,12 @@
   - 目标抓取位姿：`qpos_init`、`qpos_squeeze`
   - 目标抓取关节向量：`squeeze_joint`
 - 坐标系规则：
-  - 对单条件局部点云输入，选择的输入坐标系（`world` 或 `camera`）也决定标签和输出坐标系。
+  - 对局部点云输入，选择的输入坐标系（`world` 或 `camera`）也决定标签和输出坐标系。
 
 ## 当前优先级
 
-- 先聚焦单条件流水线。
-- 在单条件 train/sim 路径稳定前，不处理双条件训练和评测。
+- 先聚焦点云条件流水线。
+- 在当前 train/sim 路径稳定前，不处理双条件训练和评测。
 - 评估改动时，优先看抓取成功率，不只看 loss。
 
 ## 仓库结构
@@ -173,28 +173,28 @@ split 记录应包含：
 
 以下入口定义了当前主工作面，文档必须与之保持一致：
 
-- `train_sc.py`：统一的单条件训练入口
+- `train.py`：统一的点云条件训练入口
 - `src/print_dataset.py`：打印单条数据样本用于检查
 - `sim_dataset.py`：直接评测数据集内保存抓取的 oracle 入口
-- `sim_sc.py`：统一的单条件仿真评测入口
+- `sim.py`：统一的点云条件仿真评测入口
 
 实现优先级：
 
-- 先稳定单条件 train/sim 路径
+- 先稳定当前 train/sim 路径
 - 上述路径稳定后，再处理双条件流程
 
 推荐命令风格：
 
 ```bash
-python train_sc.py --config configs/ycb_liberhand_sc.yaml --set model.algorithm=cvae --set data.frame=world --set data.cloud_type=global
-python sim_sc.py --config configs/ycb_liberhand_sc.yaml --set sim.split=train --set sim.ckpt_path=...
-python sim_dataset.py --config configs/ycb_liberhand_sc.yaml --split train
-python -m src.print_dataset --config configs/ycb_liberhand_sc.yaml --split train --index 0
+python train.py --config configs/ycb_liberhand.yaml --set model.algorithm=cvae --set data.frame=world --set data.cloud_type=global
+python sim.py --config configs/ycb_liberhand.yaml --set sim.split=train --set sim.ckpt_path=...
+python sim_dataset.py --config configs/ycb_liberhand.yaml --split train
+python -m src.print_dataset --config configs/ycb_liberhand.yaml --split train --index 0
 ```
 
 仿真输出目录规则：
 
-- `sim_sc.py` 将仿真输出写到生成器 checkpoint 所属训练 run 目录下
+- `sim.py` 将仿真输出写到生成器 checkpoint 所属训练 run 目录下
 - 当 `evaluator.enabled=false` 时，输出目录为 `sim/`
 - 当 `evaluator.enabled=true` 时，输出目录为 `sim_evaluator/`
 - 必须将未启用 evaluator 和启用 evaluator 的摘要结果分开保存，禁止互相覆盖
@@ -203,9 +203,9 @@ python -m src.print_dataset --config configs/ycb_liberhand_sc.yaml --split train
 
 训练、评估、仿真都必须由配置驱动。
 
-当前活跃的单条件根配置为：
+当前活跃的根配置为：
 
-- `configs/ycb_liberhand_sc.yaml`
+- `configs/ycb_liberhand.yaml`
 
 组合实验统一通过 CLI 覆盖，例如：
 
@@ -213,7 +213,7 @@ python -m src.print_dataset --config configs/ycb_liberhand_sc.yaml --split train
 - `--set data.frame=...`
 - `--set model.input_encoder.name=...`
 
-单条件 base config 中，模型配置应按以下三层组织：
+base config 中，模型配置应按以下三层组织：
 
 - `model.common`
 - `model.algorithms.<algorithm>`
@@ -230,6 +230,7 @@ python -m src.print_dataset --config configs/ycb_liberhand_sc.yaml --split train
 - backbone 替换必须低成本且显式
 - 保持清晰的算法注册/解析接口，让 CVAE、diffusion、flow 共享同一套数据与运行时接口
 - 避免做出把仓库锁死在单一生成范式上的架构决策
+- 当前主线默认就是点云条件模型，不要再在类名或文件名里用 `SC` 后缀表达这个默认事实
 
 ## Python 开发规范
 

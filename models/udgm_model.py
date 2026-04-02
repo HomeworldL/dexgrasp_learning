@@ -4,17 +4,17 @@ from typing import Any
 
 import torch
 
-from models.base_sc import BaseSCModel
+from models.base_model import BaseModel
 from models.udgm import FlowTargetCodec, UDGMConditionAdapter, UDGMFlow
 
 
-class UDGMScModel(BaseSCModel):
-    """适配当前单条件主线的 UDGM 条件 flow 生成器。"""
+class UDGMModel(BaseModel):
+    """适配当前主线的 UDGM 条件 flow 生成器。"""
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         if self.algorithm != "udgm":
-            raise NotImplementedError("UDGMScModel only supports model.algorithm=udgm.")
+            raise NotImplementedError("UDGMModel only supports model.algorithm=udgm.")
 
         algorithm_config = dict(self.model_config)
         self.codec = FlowTargetCodec(
@@ -72,30 +72,23 @@ class UDGMScModel(BaseSCModel):
         nll = raw_nll
         if self.loss_clamp_max is not None:
             nll = nll.clamp_max(self.loss_clamp_max)
-        loss_nll = nll.mean()
+        loss_flow = nll.mean()
         outputs = {
-            "loss_nll": loss_nll,
+            "loss_flow": loss_flow,
             "mean_log_prob": log_prob.mean(),
             "raw_nll": raw_nll.mean(),
-            "loss": loss_nll,
+            "loss": loss_flow,
         }
         if self.loss_clamp_max is not None:
             outputs["clip_fraction"] = (raw_nll > self.loss_clamp_max).float().mean()
         return outputs
-
-    def infer(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        sampled = self.sample(batch=batch, num_samples=1)
-        return {
-            "pred_init_pose": sampled["pred_init_pose"][:, 0, :],
-            "pred_squeeze_pose": sampled["pred_squeeze_pose"][:, 0, :],
-            "pred_squeeze_joint": sampled["pred_squeeze_joint"][:, 0, :],
-        }
 
     def sample(
         self,
         batch: dict[str, torch.Tensor],
         num_samples: int,
     ) -> dict[str, torch.Tensor]:
+        self._validate_num_samples(num_samples)
         condition = self._build_condition(batch)
         sampled_x, _ = self.flow.sample_and_log_prob(
             num_samples=num_samples,

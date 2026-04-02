@@ -29,8 +29,8 @@ class PointCloudSample:
     cam_extrinsic: np.ndarray | None
 
 
-class GraspDatasetSC(Dataset):
-    """单条件抓取数据集。"""
+class GraspDataset(Dataset):
+    """点云条件抓取数据集。"""
 
     def __init__(
         self,
@@ -144,7 +144,7 @@ class DistinctObjectBatchSampler(Sampler[list[tuple[int, int]]]):
 
     def __init__(
         self,
-        dataset: GraspDatasetSC,
+        dataset: GraspDataset,
         batch_size: int,
         num_steps: int,
         seed: int,

@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from train_sc import initialize_model_from_checkpoint, resolve_initial_step
+from train import initialize_model_from_checkpoint, resolve_initial_step
 
 
 def test_resolve_initial_step_prefers_checkpoint_step_when_not_configured() -> None:

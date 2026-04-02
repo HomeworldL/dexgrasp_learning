@@ -68,8 +68,8 @@ def build_input_encoder(model_config: dict[str, Any]) -> nn.Module:
     )
 
 
-class BaseSCModel(nn.Module):
-    """单条件模型的最小公共骨架。"""
+class BaseModel(nn.Module):
+    """点云条件抓取模型的最小公共骨架。"""
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__()
@@ -118,3 +118,36 @@ class BaseSCModel(nn.Module):
                 ..., squeeze_end : squeeze_end + self.joint_dim
             ],
         }
+
+    @staticmethod
+    def _validate_num_samples(num_samples: int) -> None:
+        if num_samples <= 0:
+            raise ValueError(f"num_samples must be positive, got {num_samples}.")
+
+    @staticmethod
+    def _squeeze_single_sample_dim(
+        sampled: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        squeezed: dict[str, torch.Tensor] = {}
+        for key, value in sampled.items():
+            if value.ndim < 2:
+                raise ValueError(
+                    f"Expected sampled tensor '{key}' to have at least 2 dims, got {value.shape}."
+                )
+            if value.shape[1] != 1:
+                raise ValueError(
+                    f"Expected sampled tensor '{key}' to have sample dim 1, got {value.shape}."
+                )
+            squeezed[key] = value[:, 0, ...]
+        return squeezed
+
+    def infer(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """默认单样本推理路径。"""
+        return self._squeeze_single_sample_dim(self.sample(batch=batch, num_samples=1))
+
+    def sample(
+        self,
+        batch: dict[str, torch.Tensor],
+        num_samples: int,
+    ) -> dict[str, torch.Tensor]:
+        raise NotImplementedError

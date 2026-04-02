@@ -1,47 +1,35 @@
 from __future__ import annotations
 
-from typing import Any
-
-from models.base_sc import BaseSCModel
-from models.cvae_sc import CVAESingleConditionModel
-from models.dp_rt_sc import DPRTScModel
-from models.dp_sc import DPScModel
-from models.dexdiffuser_rt_sc import DexDiffuserRTSCModel
-from models.dexdiffuser_sc import DexDiffuserSCModel
-from models.udgm_rt_sc import UDGMRTScModel
-from models.udgm_sc import UDGMScModel
+from models.base_model import BaseModel
+from models.registry import (
+    ALGORITHM_REGISTRY,
+    SUPPORTED_INPUT_ENCODERS,
+    normalize_algorithm_name,
+    normalize_input_encoder_name,
+)
 
 
 def list_algorithms() -> list[str]:
-    return ["cvae", "dexdiffuser", "dexdiffuser_rt", "udgm", "udgm_rt", "dp", "dp_rt"]
+    return list(ALGORITHM_REGISTRY.keys())
 
 
-def build_model(config: dict[str, Any]) -> BaseSCModel:
+def build_model(config: dict[str, object]) -> BaseModel:
     """按配置构建当前主线模型。"""
-    algorithm = str(config.get("model", {}).get("algorithm", "cvae")).strip().lower()
-    input_encoder_name = str(
-        config.get("model", {}).get("input_encoder", {}).get("name", "pointnet")
-    ).strip().lower()
-    if input_encoder_name not in {"pointnet", "bps"}:
+    model_config = dict(config.get("model", {}))
+    algorithm = normalize_algorithm_name(model_config.get("algorithm", "cvae"))
+    input_encoder_name = normalize_input_encoder_name(
+        dict(model_config.get("input_encoder", {})).get("name", "pointnet")
+    )
+    if input_encoder_name not in SUPPORTED_INPUT_ENCODERS:
         raise NotImplementedError(
             f"model.input_encoder.name={input_encoder_name} is reserved for future work. "
-            "The current mainline implements pointnet and bps."
+            "The current mainline implements "
+            f"{', '.join(sorted(SUPPORTED_INPUT_ENCODERS))}."
         )
-    if algorithm == "cvae":
-        return CVAESingleConditionModel(config)
-    if algorithm == "dexdiffuser":
-        return DexDiffuserSCModel(config)
-    if algorithm == "dexdiffuser_rt":
-        return DexDiffuserRTSCModel(config)
-    if algorithm == "udgm":
-        return UDGMScModel(config)
-    if algorithm == "udgm_rt":
-        return UDGMRTScModel(config)
-    if algorithm == "dp":
-        return DPScModel(config)
-    if algorithm == "dp_rt":
-        return DPRTScModel(config)
+    spec = ALGORITHM_REGISTRY.get(algorithm)
+    if spec is not None:
+        return spec.model_cls(config)
     raise NotImplementedError(
         f"model.algorithm={algorithm} is reserved for future work. "
-        "The current mainline implements cvae, dexdiffuser, dexdiffuser_rt, udgm, udgm_rt, dp, and dp_rt."
+        "The current mainline implements " + ", ".join(list_algorithms()) + "."
     )

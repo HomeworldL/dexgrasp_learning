@@ -22,14 +22,14 @@ from src.config import (
     set_random_seed,
     validate_train_config,
 )
-from src.grasp_dataset_sc import DistinctObjectBatchSampler, GraspDatasetSC
+from src.grasp_dataset import DistinctObjectBatchSampler, GraspDataset
 
 
 LOGGER = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train the unified single-condition grasp generator.")
+    parser = argparse.ArgumentParser(description="Train the unified point-cloud-conditioned grasp generator.")
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument(
         "--set",
@@ -168,13 +168,13 @@ def main() -> None:
     remaining_steps = max_steps - initial_step
     if init_ckpt_path is not None:
         LOGGER.info(
-            "[train_sc] initializing model from checkpoint=%s initial_step=%d target_step=%d",
+            "[train] initializing model from checkpoint=%s initial_step=%d target_step=%d",
             init_ckpt_path,
             initial_step,
             max_steps,
         )
 
-    train_dataset = GraspDatasetSC(
+    train_dataset = GraspDataset(
         manifest_path=str(config["data"]["manifest_path"]),
         split="train",
         cloud_type=str(config["data"]["cloud_type"]),
@@ -238,7 +238,7 @@ def main() -> None:
         }
         if step % log_every == 0 or step == max_steps:
             metric_parts = [f"{key}={value:.6f}" for key, value in sorted(last_record.items())]
-            LOGGER.info("[train_sc] step=%d %s", step, " ".join(metric_parts))
+            LOGGER.info("[train] step=%d %s", step, " ".join(metric_parts))
         if step % save_every == 0 or step == max_steps:
             save_checkpoint(
                 path=last_checkpoint,
@@ -262,7 +262,7 @@ def main() -> None:
         encoding="utf-8",
     )
     LOGGER.info(
-        "[train_sc] finished steps=%d checkpoint=%s loss=%.6f",
+        "[train] finished steps=%d checkpoint=%s loss=%.6f",
         max_steps,
         last_checkpoint,
         last_record.get("loss", float("nan")),

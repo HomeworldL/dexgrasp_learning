@@ -6,7 +6,7 @@ This repository focuses on dexterous grasp generation from point clouds.
 
 The current mainline goal is:
 
-1. Start with single-condition grasp generation using global point clouds.
+1. Start with point-cloud-conditioned grasp generation using global point clouds.
 2. Validate grasp success rate in the world frame first.
 3. Then switch to the camera frame and compare success rate.
 4. Finally move to partial point clouds.
@@ -22,12 +22,12 @@ The current baseline algorithm is CVAE. The point-cloud backbone must remain swa
   - Target grasp poses: `qpos_init`, `qpos_squeeze`
   - Target grasp joint vector: `squeeze_joint`
 - Coordinate-setting rule:
-  - For single-condition local-point-cloud input, the chosen input frame (`world` or `camera`) also determines the label/output frame.
+  - For local point-cloud input, the chosen input frame (`world` or `camera`) also determines the label/output frame.
 
 ## Current Priority
 
-- Focus on the single-condition pipeline first.
-- Do not spend time on dual-condition training or evaluation until the single-condition train/sim loop is stable.
+- Focus on the point-cloud-conditioned pipeline first.
+- Do not spend time on dual-condition training or evaluation until the current train/sim loop is stable.
 - Evaluate changes primarily by grasp success metrics, not only by loss reduction.
 
 ## Repository Layout
@@ -173,28 +173,28 @@ Current supervised targets:
 
 These entry points define the current working surface and must stay consistent with the docs:
 
-- `train_sc.py`: unified single-condition training entry
+- `train.py`: unified point-cloud-conditioned training entry
 - `src/print_dataset.py`: print one dataset sample for inspection
 - `sim_dataset.py`: oracle evaluation using grasps stored in the dataset
-- `sim_sc.py`: unified single-condition simulation evaluation entry
+- `sim.py`: unified point-cloud-conditioned simulation evaluation entry
 
 Implementation priority:
 
-- Stabilize the single-condition train/sim path first
+- Stabilize the current train/sim path first
 - Only work on dual-condition flows after the above is stable
 
 Recommended command style:
 
 ```bash
-python train_sc.py --config configs/ycb_liberhand_sc.yaml --set model.algorithm=cvae --set data.frame=world --set data.cloud_type=global
-python sim_sc.py --config configs/ycb_liberhand_sc.yaml --set sim.split=train --set sim.ckpt_path=...
-python sim_dataset.py --config configs/ycb_liberhand_sc.yaml --split train
-python -m src.print_dataset --config configs/ycb_liberhand_sc.yaml --split train --index 0
+python train.py --config configs/ycb_liberhand.yaml --set model.algorithm=cvae --set data.frame=world --set data.cloud_type=global
+python sim.py --config configs/ycb_liberhand.yaml --set sim.split=train --set sim.ckpt_path=...
+python sim_dataset.py --config configs/ycb_liberhand.yaml --split train
+python -m src.print_dataset --config configs/ycb_liberhand.yaml --split train --index 0
 ```
 
 Simulation output directory rule:
 
-- `sim_sc.py` writes simulation outputs under the training run directory that owns the generator checkpoint
+- `sim.py` writes simulation outputs under the training run directory that owns the generator checkpoint
 - When `evaluator.enabled=false`, write outputs to `sim/`
 - When `evaluator.enabled=true`, write outputs to `sim_evaluator/`
 - Keep non-evaluator and evaluator-enabled summaries separated; do not overwrite one with the other
@@ -203,9 +203,9 @@ Simulation output directory rule:
 
 Training, evaluation, and simulation must all be config-driven.
 
-The active single-condition root config is:
+The active root config is:
 
-- `configs/ycb_liberhand_sc.yaml`
+- `configs/ycb_liberhand.yaml`
 
 Use CLI overrides for experiment combinations, for example:
 
@@ -213,7 +213,7 @@ Use CLI overrides for experiment combinations, for example:
 - `--set data.frame=...`
 - `--set model.input_encoder.name=...`
 
-Single-condition base configs should keep model configuration in these layers:
+Base configs should keep model configuration in these layers:
 
 - `model.common`
 - `model.algorithms.<algorithm>`
@@ -230,6 +230,7 @@ Hard requirements:
 - Keep backbone replacement cheap and explicit
 - Preserve a clean algorithm registry so CVAE, diffusion, and flow can share the same data/runtime interface
 - Avoid architecture decisions that lock the repository to a single generative family
+- Point-cloud-conditioned models are the current default mainline. Do not encode that default with `SC` suffixes in file names or class names.
 
 ## Python Development Rules
 

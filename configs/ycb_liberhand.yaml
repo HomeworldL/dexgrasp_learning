@@ -21,6 +21,11 @@ model:
       latent_dim: 64
       encoder_hidden_dims: [512, 256]
       decoder_hidden_dims: [256, 256]
+      loss_weights:
+        init_pose: 1.0
+        squeeze_pose: 1.0
+        joint: 5.0
+        kld: 0.001
     udgm:
       condition_dim: 256
       target_normalization:
@@ -41,7 +46,6 @@ model:
         conditioner_type: residual
         residual_num_blocks: 2
         loss_clamp_max: 80.0
-        training_pose_num_samples: 8
     udgm_rt:
       condition_dim: 256
       target_normalization:
@@ -176,7 +180,6 @@ model:
         num_inference_timesteps: 10
         log_prob_type: null
         loss_type: l1
-    flow: {}
   input_encoders:
     pointnet:
       point_feature_dim: 3
@@ -269,14 +272,9 @@ train:
   lr_min: 0.0001
   weight_decay: 0.0001
   grad_clip: 10.0
-  loss_weights:
-    init_pose: 1.0
-    squeeze_pose: 1.0
-    joint: 5.0
-    kld: 0.001
   log_every: 50
   save_every: 500
-  output_dir: outputs/ycb_liberhand_sc
+  output_dir: outputs/ycb_liberhand
 
 sim:
   split: train
@@ -322,4 +320,4 @@ evaluator:
       reg: 0.25
     log_every: 50
     save_every: 500
-    output_dir: outputs/ycb_liberhand_sc/evaluator
+    output_dir: outputs/ycb_liberhand/evaluator

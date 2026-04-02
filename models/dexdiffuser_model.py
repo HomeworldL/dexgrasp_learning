@@ -4,7 +4,7 @@ from typing import Any
 
 import torch
 
-from models.base_sc import BaseSCModel
+from models.base_model import BaseModel
 from models.dexdiffuser import (
     BPSConditionTokenizer,
     DDPM,
@@ -14,14 +14,14 @@ from models.dexdiffuser import (
 )
 
 
-class DexDiffuserSCModel(BaseSCModel):
-    """适配当前单条件主线的 DexDiffuser 生成器。"""
+class DexDiffuserModel(BaseModel):
+    """适配当前主线的 DexDiffuser 生成器。"""
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         if self.algorithm != "dexdiffuser":
             raise NotImplementedError(
-                "DexDiffuserSCModel only supports model.algorithm=dexdiffuser."
+                "DexDiffuserModel only supports model.algorithm=dexdiffuser."
             )
         algorithm_config = dict(self.model_config)
         condition_config = dict(algorithm_config.get("condition", {}))
@@ -89,19 +89,12 @@ class DexDiffuserSCModel(BaseSCModel):
         context_tokens = self._build_context_tokens(batch)
         return self.ddpm.compute_loss(x0=x0, context=context_tokens)
 
-    def infer(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        sampled = self.sample(batch=batch, num_samples=1)
-        return {
-            "pred_init_pose": sampled["pred_init_pose"][:, 0, :],
-            "pred_squeeze_pose": sampled["pred_squeeze_pose"][:, 0, :],
-            "pred_squeeze_joint": sampled["pred_squeeze_joint"][:, 0, :],
-        }
-
     def sample(
         self,
         batch: dict[str, torch.Tensor],
         num_samples: int,
     ) -> dict[str, torch.Tensor]:
+        self._validate_num_samples(num_samples)
         context_tokens = self._build_context_tokens(batch)
         sampled_x = self.ddpm.sample(
             context=context_tokens,

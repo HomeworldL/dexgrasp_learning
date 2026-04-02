@@ -176,7 +176,7 @@ class _CaptureHead(nn.Module):
         return squeeze_pose.new_zeros(squeeze_pose.shape[0], squeeze_pose.shape[1], self.output_dim)
 
 
-def test_udgm_rt_forward_uses_teacher_forced_squeeze_pose() -> None:
+def test_udgm_rt_forward_uses_sampled_squeeze_pose() -> None:
     model = build_model(_base_config())
     batch = _dummy_batch()
     predicted_pose = torch.full_like(batch["squeeze_pose"], 0.25)

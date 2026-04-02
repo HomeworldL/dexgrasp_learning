@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config",
         type=str,
-        default="configs/ycb_liberhand_sc.yaml",
+        default="configs/ycb_liberhand.yaml",
     )
     parser.add_argument("--split", type=str, choices=["train", "test"], default="test")
     parser.add_argument("--visualize", action="store_true")

@@ -5,7 +5,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from models.base_sc import BaseSCModel
+from models.base_model import BaseModel
 from models.dexdiffuser import (
     BPSConditionTokenizer,
     DDPM,
@@ -17,14 +17,14 @@ from models.dexdiffuser import (
 )
 
 
-class DexDiffuserRTSCModel(BaseSCModel):
+class DexDiffuserRTModel(BaseModel):
     """先扩散 squeeze_pose，再回归 init_pose 与 squeeze_joint。"""
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         if self.algorithm != "dexdiffuser_rt":
             raise NotImplementedError(
-                "DexDiffuserRTSCModel only supports model.algorithm=dexdiffuser_rt."
+                "DexDiffuserRTModel only supports model.algorithm=dexdiffuser_rt."
             )
         algorithm_config = dict(self.model_config)
         condition_config = dict(algorithm_config.get("condition", {}))
@@ -90,27 +90,15 @@ class DexDiffuserRTSCModel(BaseSCModel):
         self.pose_loss = nn.SmoothL1Loss()
         self.joint_loss = nn.SmoothL1Loss()
 
-        train_loss_weights = dict(config.get("train", {}).get("loss_weights", {}))
         algorithm_loss_weights = dict(algorithm_config.get("loss_weights", {}))
         self.loss_weights = {
             "diffusion": float(
-                algorithm_loss_weights.get(
-                    "diffusion",
-                    train_loss_weights.get("squeeze_pose", 1.0),
-                )
+                algorithm_loss_weights.get("diffusion", 1.0)
             ),
             "init_pose": float(
-                algorithm_loss_weights.get(
-                    "init_pose",
-                    train_loss_weights.get("init_pose", 1.0),
-                )
+                algorithm_loss_weights.get("init_pose", 1.0)
             ),
-            "joint": float(
-                algorithm_loss_weights.get(
-                    "joint",
-                    train_loss_weights.get("joint", 1.0),
-                )
-            ),
+            "joint": float(algorithm_loss_weights.get("joint", 1.0)),
         }
 
     def _build_condition_features(
@@ -149,23 +137,15 @@ class DexDiffuserRTSCModel(BaseSCModel):
             batch["squeeze_joint"],
         )
         loss = (
-            self.loss_weights["diffusion"] * diffusion_outputs["loss_noise"]
+            self.loss_weights["diffusion"] * diffusion_outputs["loss_diffusion"]
             + self.loss_weights["init_pose"] * loss_init_pose
             + self.loss_weights["joint"] * loss_joint
         )
         return {
-            "loss_noise": diffusion_outputs["loss_noise"],
+            "loss_diffusion": diffusion_outputs["loss_diffusion"],
             "loss_init_pose": loss_init_pose,
             "loss_joint": loss_joint,
             "loss": loss,
-        }
-
-    def infer(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        sampled = self.sample(batch=batch, num_samples=1)
-        return {
-            "pred_init_pose": sampled["pred_init_pose"][:, 0, :],
-            "pred_squeeze_pose": sampled["pred_squeeze_pose"][:, 0, :],
-            "pred_squeeze_joint": sampled["pred_squeeze_joint"][:, 0, :],
         }
 
     def sample(
@@ -173,6 +153,7 @@ class DexDiffuserRTSCModel(BaseSCModel):
         batch: dict[str, torch.Tensor],
         num_samples: int,
     ) -> dict[str, torch.Tensor]:
+        self._validate_num_samples(num_samples)
         global_feature, context_tokens = self._build_condition_features(batch)
         sampled_squeeze_pose = self.ddpm.sample(
             context=context_tokens,

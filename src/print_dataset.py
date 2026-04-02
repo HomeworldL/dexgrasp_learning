@@ -6,7 +6,7 @@ import json
 import torch
 
 from src.config import apply_overrides, load_config
-from src.grasp_dataset_sc import GraspDatasetSC
+from src.grasp_dataset import GraspDataset
 
 
 def describe(value) -> str:
@@ -16,8 +16,8 @@ def describe(value) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Print one sample from GraspDatasetSC.")
-    parser.add_argument("--config", type=str, default="configs/ycb_liberhand_sc.yaml")
+    parser = argparse.ArgumentParser(description="Print one sample from GraspDataset.")
+    parser.add_argument("--config", type=str, default="configs/ycb_liberhand.yaml")
     parser.add_argument(
         "--set",
         action="append",
@@ -31,7 +31,7 @@ def main() -> None:
 
     config = load_config(args.config)
     config = apply_overrides(config, args.set)
-    dataset = GraspDatasetSC(
+    dataset = GraspDataset(
         manifest_path=str(config["data"]["manifest_path"]),
         split=args.split,
         cloud_type=str(config["data"]["cloud_type"]),

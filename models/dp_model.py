@@ -4,17 +4,17 @@ from typing import Any
 
 import torch
 
-from models.base_sc import BaseSCModel
+from models.base_model import BaseModel
 from models.dp import DPDiffusionHead
 
 
-class DPScModel(BaseSCModel):
+class DPModel(BaseModel):
     """DexLearn DiffusionRTJ 风格的单阶段轻量 diffusion 生成器。"""
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         if self.algorithm != "dp":
-            raise NotImplementedError("DPScModel only supports model.algorithm=dp.")
+            raise NotImplementedError("DPModel only supports model.algorithm=dp.")
         algorithm_config = dict(self.model_config)
         rms_config = dict(algorithm_config.get("rms", {}))
         self.head = DPDiffusionHead(
@@ -30,19 +30,12 @@ class DPScModel(BaseSCModel):
         target = self.target_vector(batch)
         return self.head(target=target, condition=condition)
 
-    def infer(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        sampled = self.sample(batch=batch, num_samples=1)
-        return {
-            "pred_init_pose": sampled["pred_init_pose"][:, 0, :],
-            "pred_squeeze_pose": sampled["pred_squeeze_pose"][:, 0, :],
-            "pred_squeeze_joint": sampled["pred_squeeze_joint"][:, 0, :],
-        }
-
     def sample(
         self,
         batch: dict[str, torch.Tensor],
         num_samples: int,
     ) -> dict[str, torch.Tensor]:
+        self._validate_num_samples(num_samples)
         condition = self.encode_condition(batch)
         prediction, _ = self.head.sample(condition=condition, num_samples=num_samples)
         split_prediction = self.split_prediction(prediction)

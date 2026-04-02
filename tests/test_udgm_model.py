@@ -109,7 +109,7 @@ def test_udgm_pointnet_forward_and_sample() -> None:
     outputs = model(batch)
     sampled = model.sample(batch, num_samples=3)
 
-    assert "loss_nll" in outputs
+    assert "loss_flow" in outputs
     assert outputs["loss"].ndim == 0
     assert sampled["pred_init_pose"].shape == (2, 3, 6)
     assert sampled["pred_squeeze_pose"].shape == (2, 3, 6)

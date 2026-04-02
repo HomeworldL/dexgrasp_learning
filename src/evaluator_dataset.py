@@ -10,7 +10,7 @@ import torch
 from torch.utils.data import Dataset
 
 from src.config import normalize_cloud_type, normalize_frame, normalize_point_sampling
-from src.grasp_dataset_sc import DistinctObjectBatchSampler, load_conditioning_point_cloud
+from src.grasp_dataset import DistinctObjectBatchSampler, load_conditioning_point_cloud
 from src.manifest import ManifestItem, load_manifest
 from src.transforms import matrix_to_se3_log, qpos_to_matrix, world_to_camera_pose
 

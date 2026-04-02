@@ -5,12 +5,12 @@ from typing import Any
 import torch
 from torch import nn
 
-from models.base_sc import BaseSCModel
+from models.base_model import BaseModel
 from models.cvae.cvae import VAE
 
 
-class CVAESingleConditionModel(BaseSCModel):
-    """单条件 PointNet + CVAE 生成器。"""
+class CVAEModel(BaseModel):
+    """PointNet/BPS 条件下的 CVAE 抓取生成器。"""
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
@@ -18,19 +18,19 @@ class CVAESingleConditionModel(BaseSCModel):
             raise NotImplementedError(
                 "Only model.algorithm=cvae is implemented in the current mainline."
             )
-        train_config = dict(config.get("train", {}))
-        loss_weights = dict(train_config.get("loss_weights", {}))
+        algorithm_config = dict(self.model_config)
+        loss_weights = dict(algorithm_config.get("loss_weights", {}))
         self.loss_weights = {
             "init_pose": float(loss_weights.get("init_pose", 1.0)),
             "squeeze_pose": float(loss_weights.get("squeeze_pose", 1.0)),
             "joint": float(loss_weights.get("joint", 1.0)),
-            "kld": float(loss_weights.get("kld", train_config.get("beta_kld", 1e-3))),
+            "kld": float(loss_weights.get("kld", 1e-3)),
         }
         self.cvae = VAE(
             encoder_layer_sizes=[self.target_dim]
-            + list(self.model_config.get("encoder_hidden_dims", [512, 256])),
-            latent_size=int(self.model_config.get("latent_dim", 64)),
-            decoder_layer_sizes=list(self.model_config.get("decoder_hidden_dims", [256, 256]))
+            + list(algorithm_config.get("encoder_hidden_dims", [512, 256])),
+            latent_size=int(algorithm_config.get("latent_dim", 64)),
+            decoder_layer_sizes=list(algorithm_config.get("decoder_hidden_dims", [256, 256]))
             + [self.target_dim],
             conditional=True,
             condition_size=self.point_feat_dim,
@@ -68,23 +68,13 @@ class CVAESingleConditionModel(BaseSCModel):
             "loss": loss,
         }
 
-    def infer(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """单样本推理。"""
-        sampled = self.sample(batch=batch, num_samples=1)
-        return {
-            "pred_init_pose": sampled["pred_init_pose"][:, 0, :],
-            "pred_squeeze_pose": sampled["pred_squeeze_pose"][:, 0, :],
-            "pred_squeeze_joint": sampled["pred_squeeze_joint"][:, 0, :],
-        }
-
     def sample(
         self,
         batch: dict[str, torch.Tensor],
         num_samples: int,
     ) -> dict[str, torch.Tensor]:
         """并行采样多个抓取候选。"""
-        if num_samples <= 0:
-            raise ValueError(f"num_samples must be positive, got {num_samples}.")
+        self._validate_num_samples(num_samples)
         condition = self.encode_condition(batch)
         batch_size = condition.shape[0]
         repeated_condition = (

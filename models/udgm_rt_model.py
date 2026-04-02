@@ -5,7 +5,7 @@ from typing import Any
 import torch
 from torch import nn
 
-from models.base_sc import BaseSCModel
+from models.base_model import BaseModel
 from models.udgm import (
     InitJointCodec,
     SqueezePoseCodec,
@@ -15,13 +15,13 @@ from models.udgm import (
 )
 
 
-class UDGMRTScModel(BaseSCModel):
+class UDGMRTModel(BaseModel):
     """DexLearn flow+MLP 风格的两阶段 UDGM。"""
 
     def __init__(self, config: dict[str, Any]) -> None:
         super().__init__(config)
         if self.algorithm != "udgm_rt":
-            raise NotImplementedError("UDGMRTScModel only supports model.algorithm=udgm_rt.")
+            raise NotImplementedError("UDGMRTModel only supports model.algorithm=udgm_rt.")
 
         algorithm_config = dict(self.model_config)
         normalization_config = dict(algorithm_config.get("target_normalization", {}))
@@ -139,19 +139,12 @@ class UDGMRTScModel(BaseSCModel):
             outputs["clip_fraction"] = (raw_nll > self.loss_clamp_max).float().mean()
         return outputs
 
-    def infer(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        sampled = self.sample(batch=batch, num_samples=1)
-        return {
-            "pred_init_pose": sampled["pred_init_pose"][:, 0, :],
-            "pred_squeeze_pose": sampled["pred_squeeze_pose"][:, 0, :],
-            "pred_squeeze_joint": sampled["pred_squeeze_joint"][:, 0, :],
-        }
-
     def sample(
         self,
         batch: dict[str, torch.Tensor],
         num_samples: int,
     ) -> dict[str, torch.Tensor]:
+        self._validate_num_samples(num_samples)
         condition = self._build_condition(batch)
         sampled_squeeze_pose, _ = self.flow.sample_and_log_prob(
             num_samples=num_samples,

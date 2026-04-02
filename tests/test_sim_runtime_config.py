@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sim_sc import build_sim_output_dir, build_sim_runtime_config
+from sim import build_sim_output_dir, build_sim_runtime_config, build_sim_summary_path
 from src.mj_ho import _normalize_friction_coef
 
 
@@ -72,3 +72,27 @@ def test_build_sim_output_dir_uses_distinct_directory_for_evaluator(
     assert sim_evaluator_dir == checkpoint_path.parent / "sim_evaluator"
     assert sim_dir.exists()
     assert sim_evaluator_dir.exists()
+
+
+def test_build_sim_summary_path_includes_split_and_evaluator_directory(
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = tmp_path / "run" / "last.ckpt"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_text("", encoding="utf-8")
+
+    summary_path = build_sim_summary_path(
+        str(checkpoint_path),
+        split="test",
+        evaluator_enabled=False,
+    )
+    evaluator_summary_path = build_sim_summary_path(
+        str(checkpoint_path),
+        split="train",
+        evaluator_enabled=True,
+    )
+
+    assert summary_path == checkpoint_path.parent / "sim" / "sim_summary_test.json"
+    assert evaluator_summary_path == (
+        checkpoint_path.parent / "sim_evaluator" / "sim_summary_train.json"
+    )

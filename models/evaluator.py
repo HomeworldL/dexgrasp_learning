@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from nflows.nn.nets.resnet import ResidualNet
 from torch import nn
 
-from models.base_sc import build_input_encoder, materialize_model_config
+from models.base_model import build_input_encoder, materialize_model_config
 
 
 class GraspEvaluator(nn.Module):

@@ -9,6 +9,13 @@ import numpy as np
 import torch
 import yaml
 
+from models.registry import (
+    ALGORITHM_REGISTRY,
+    SUPPORTED_INPUT_ENCODERS,
+    normalize_algorithm_name,
+    normalize_input_encoder_name,
+)
+
 
 def load_config(path: str) -> dict[str, Any]:
     """加载 YAML 配置文件。"""
@@ -147,82 +154,26 @@ def validate_common_config(config: dict[str, Any]) -> None:
 
 
 def _validate_algorithm_config(config: dict[str, Any]) -> None:
-    algorithm = str(get_required(config, "model.algorithm")).strip().lower()
-    if algorithm == "cvae":
-        get_required(config, "model.algorithms.cvae.latent_dim")
-        return
-    if algorithm == "dexdiffuser":
-        get_required(config, "model.algorithms.dexdiffuser.condition.context_dim")
-        get_required(config, "model.algorithms.dexdiffuser.unet.d_model")
-        get_required(config, "model.algorithms.dexdiffuser.diffusion.steps")
-        get_required(config, "model.algorithms.dexdiffuser.diffusion.schedule.beta")
-        get_required(config, "model.algorithms.dexdiffuser.diffusion.schedule.beta_schedule")
-        input_encoder_name = str(get_required(config, "model.input_encoder.name")).strip().lower()
-        if input_encoder_name == "pointnet":
-            get_required(
-                config,
-                "model.algorithms.dexdiffuser.condition.pointnet.num_condition_tokens",
-            )
-            return
-        if input_encoder_name == "bps":
-            get_required(
-                config,
-                "model.algorithms.dexdiffuser.condition.bps.num_condition_tokens",
-            )
-            return
-        raise NotImplementedError(
-            f"DexDiffuser currently supports pointnet and bps, got {input_encoder_name}."
+    algorithm = normalize_algorithm_name(get_required(config, "model.algorithm"))
+    spec = ALGORITHM_REGISTRY.get(algorithm)
+    if spec is not None:
+        for dotted_key in spec.required_keys:
+            get_required(config, dotted_key)
+        input_encoder_name = normalize_input_encoder_name(
+            get_required(config, "model.input_encoder.name")
         )
-    if algorithm == "dexdiffuser_rt":
-        get_required(config, "model.algorithms.dexdiffuser_rt.condition.context_dim")
-        get_required(config, "model.algorithms.dexdiffuser_rt.unet.d_model")
-        get_required(config, "model.algorithms.dexdiffuser_rt.diffusion.steps")
-        get_required(config, "model.algorithms.dexdiffuser_rt.diffusion.schedule.beta")
-        get_required(config, "model.algorithms.dexdiffuser_rt.diffusion.schedule.beta_schedule")
-        input_encoder_name = str(get_required(config, "model.input_encoder.name")).strip().lower()
-        if input_encoder_name == "pointnet":
-            get_required(
-                config,
-                "model.algorithms.dexdiffuser_rt.condition.pointnet.num_condition_tokens",
+        if input_encoder_name not in SUPPORTED_INPUT_ENCODERS:
+            raise NotImplementedError(
+                f"model.input_encoder.name={input_encoder_name} is reserved for future work. "
+                "The current mainline implements "
+                f"{', '.join(sorted(SUPPORTED_INPUT_ENCODERS))}."
             )
-            return
-        if input_encoder_name == "bps":
-            get_required(
-                config,
-                "model.algorithms.dexdiffuser_rt.condition.bps.num_condition_tokens",
-            )
-            return
-        raise NotImplementedError(
-            f"DexDiffuserRT currently supports pointnet and bps, got {input_encoder_name}."
-        )
-    if algorithm == "udgm":
-        get_required(config, "model.algorithms.udgm.condition_dim")
-        get_required(config, "model.algorithms.udgm.flow.hidden_dim")
-        get_required(config, "model.algorithms.udgm.flow.num_layers")
-        get_required(config, "model.algorithms.udgm.flow.num_blocks_per_layer")
-        return
-    if algorithm == "udgm_rt":
-        get_required(config, "model.algorithms.udgm_rt.condition_dim")
-        get_required(config, "model.algorithms.udgm_rt.flow.hidden_dim")
-        get_required(config, "model.algorithms.udgm_rt.flow.num_layers")
-        get_required(config, "model.algorithms.udgm_rt.flow.num_blocks_per_layer")
-        return
-    if algorithm == "dp":
-        get_required(config, "model.algorithms.dp.diffusion.scheduler_type")
-        get_required(config, "model.algorithms.dp.diffusion.scheduler.num_train_timesteps")
-        get_required(config, "model.algorithms.dp.diffusion.num_inference_timesteps")
-        get_required(config, "model.algorithms.dp.diffusion.loss_type")
-        return
-    if algorithm == "dp_rt":
-        get_required(config, "model.algorithms.dp_rt.diffusion.scheduler_type")
-        get_required(config, "model.algorithms.dp_rt.diffusion.scheduler.num_train_timesteps")
-        get_required(config, "model.algorithms.dp_rt.diffusion.num_inference_timesteps")
-        get_required(config, "model.algorithms.dp_rt.diffusion.loss_type")
-        get_required(config, "model.algorithms.dp_rt.regression.hidden_features")
+        for dotted_key in spec.encoder_required_keys.get(input_encoder_name, ()):
+            get_required(config, dotted_key)
         return
     raise NotImplementedError(
         f"model.algorithm={algorithm} is reserved for future work. "
-        "The current mainline implements cvae, dexdiffuser, dexdiffuser_rt, udgm, udgm_rt, dp, and dp_rt."
+        "The current mainline implements " + ", ".join(ALGORITHM_REGISTRY.keys()) + "."
     )
 
 
@@ -241,17 +192,6 @@ def validate_train_config(config: dict[str, Any]) -> None:
     initial_step = config.get("train", {}).get("initial_step")
     if initial_step is not None and int(initial_step) < 0:
         raise ValueError("train.initial_step must be non-negative when provided.")
-    loss_weights = config.get("train", {}).get("loss_weights", {})
-    if loss_weights:
-        if not isinstance(loss_weights, dict):
-            raise ValueError("train.loss_weights must be a mapping when provided.")
-        for key in ("init_pose", "squeeze_pose", "joint", "kld"):
-            if key not in loss_weights:
-                continue
-            value = float(loss_weights[key])
-            if value < 0.0:
-                raise ValueError(f"train.loss_weights.{key} must be non-negative, got {value}.")
-
 
 def validate_sim_config(config: dict[str, Any]) -> None:
     """校验仿真所需配置。"""

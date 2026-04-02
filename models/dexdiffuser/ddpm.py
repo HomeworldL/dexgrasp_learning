@@ -50,8 +50,8 @@ class DDPM(nn.Module):
     ) -> dict[str, torch.Tensor]:
         outputs = self.compute_loss_with_prediction(x0=x0, context=context)
         return {
-            "loss_noise": outputs["loss_noise"],
-            "loss": outputs["loss_noise"],
+            "loss_diffusion": outputs["loss_diffusion"],
+            "loss": outputs["loss_diffusion"],
         }
 
     def _sample_training_timesteps(
@@ -99,10 +99,10 @@ class DDPM(nn.Module):
         noise = torch.randn_like(x0, device=x0.device)
         x_t = self.q_sample(x0=x0, t=timesteps, noise=noise)
         pred_noise, pred_x0 = self.model_predict(x_t, timesteps, context)
-        loss_noise = self._noise_loss(pred_noise=pred_noise, noise=noise)
+        loss_diffusion = self._noise_loss(pred_noise=pred_noise, noise=noise)
         return {
-            "loss_noise": loss_noise,
-            "loss": loss_noise,
+            "loss_diffusion": loss_diffusion,
+            "loss": loss_diffusion,
             "pred_noise": pred_noise,
             "pred_x0": pred_x0,
             "timesteps": timesteps,
