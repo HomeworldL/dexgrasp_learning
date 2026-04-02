@@ -192,6 +192,13 @@ python sim_dataset.py --config configs/ycb_liberhand_sc.yaml --split train
 python -m src.print_dataset --config configs/ycb_liberhand_sc.yaml --split train --index 0
 ```
 
+仿真输出目录规则：
+
+- `sim_sc.py` 将仿真输出写到生成器 checkpoint 所属训练 run 目录下
+- 当 `evaluator.enabled=false` 时，输出目录为 `sim/`
+- 当 `evaluator.enabled=true` 时，输出目录为 `sim_evaluator/`
+- 必须将未启用 evaluator 和启用 evaluator 的摘要结果分开保存，禁止互相覆盖
+
 ## 配置优先策略
 
 训练、评估、仿真都必须由配置驱动。

@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sim_sc import build_sim_runtime_config
+from sim_sc import build_sim_output_dir, build_sim_runtime_config
 from src.mj_ho import _normalize_friction_coef
 
 
@@ -53,3 +53,22 @@ def test_sim_runtime_config_reads_flat_sim_fields() -> None:
         "close_steps": 100,
     }
     assert np.allclose(friction, np.array([0.6, 0.2], dtype=float))
+
+
+def test_build_sim_output_dir_uses_distinct_directory_for_evaluator(
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = tmp_path / "run" / "last.ckpt"
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint_path.write_text("", encoding="utf-8")
+
+    sim_dir = build_sim_output_dir(str(checkpoint_path), evaluator_enabled=False)
+    sim_evaluator_dir = build_sim_output_dir(
+        str(checkpoint_path),
+        evaluator_enabled=True,
+    )
+
+    assert sim_dir == checkpoint_path.parent / "sim"
+    assert sim_evaluator_dir == checkpoint_path.parent / "sim_evaluator"
+    assert sim_dir.exists()
+    assert sim_evaluator_dir.exists()

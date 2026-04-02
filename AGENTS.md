@@ -192,6 +192,13 @@ python sim_dataset.py --config configs/ycb_liberhand_sc.yaml --split train
 python -m src.print_dataset --config configs/ycb_liberhand_sc.yaml --split train --index 0
 ```
 
+Simulation output directory rule:
+
+- `sim_sc.py` writes simulation outputs under the training run directory that owns the generator checkpoint
+- When `evaluator.enabled=false`, write outputs to `sim/`
+- When `evaluator.enabled=true`, write outputs to `sim_evaluator/`
+- Keep non-evaluator and evaluator-enabled summaries separated; do not overwrite one with the other
+
 ## Configuration Policy
 
 Training, evaluation, and simulation must all be config-driven.

@@ -173,15 +173,56 @@ def _validate_algorithm_config(config: dict[str, Any]) -> None:
         raise NotImplementedError(
             f"DexDiffuser currently supports pointnet and bps, got {input_encoder_name}."
         )
+    if algorithm == "dexdiffuser_rt":
+        get_required(config, "model.algorithms.dexdiffuser_rt.condition.context_dim")
+        get_required(config, "model.algorithms.dexdiffuser_rt.unet.d_model")
+        get_required(config, "model.algorithms.dexdiffuser_rt.diffusion.steps")
+        get_required(config, "model.algorithms.dexdiffuser_rt.diffusion.schedule.beta")
+        get_required(config, "model.algorithms.dexdiffuser_rt.diffusion.schedule.beta_schedule")
+        input_encoder_name = str(get_required(config, "model.input_encoder.name")).strip().lower()
+        if input_encoder_name == "pointnet":
+            get_required(
+                config,
+                "model.algorithms.dexdiffuser_rt.condition.pointnet.num_condition_tokens",
+            )
+            return
+        if input_encoder_name == "bps":
+            get_required(
+                config,
+                "model.algorithms.dexdiffuser_rt.condition.bps.num_condition_tokens",
+            )
+            return
+        raise NotImplementedError(
+            f"DexDiffuserRT currently supports pointnet and bps, got {input_encoder_name}."
+        )
     if algorithm == "udgm":
         get_required(config, "model.algorithms.udgm.condition_dim")
         get_required(config, "model.algorithms.udgm.flow.hidden_dim")
         get_required(config, "model.algorithms.udgm.flow.num_layers")
         get_required(config, "model.algorithms.udgm.flow.num_blocks_per_layer")
         return
+    if algorithm == "udgm_rt":
+        get_required(config, "model.algorithms.udgm_rt.condition_dim")
+        get_required(config, "model.algorithms.udgm_rt.flow.hidden_dim")
+        get_required(config, "model.algorithms.udgm_rt.flow.num_layers")
+        get_required(config, "model.algorithms.udgm_rt.flow.num_blocks_per_layer")
+        return
+    if algorithm == "dp":
+        get_required(config, "model.algorithms.dp.diffusion.scheduler_type")
+        get_required(config, "model.algorithms.dp.diffusion.scheduler.num_train_timesteps")
+        get_required(config, "model.algorithms.dp.diffusion.num_inference_timesteps")
+        get_required(config, "model.algorithms.dp.diffusion.loss_type")
+        return
+    if algorithm == "dp_rt":
+        get_required(config, "model.algorithms.dp_rt.diffusion.scheduler_type")
+        get_required(config, "model.algorithms.dp_rt.diffusion.scheduler.num_train_timesteps")
+        get_required(config, "model.algorithms.dp_rt.diffusion.num_inference_timesteps")
+        get_required(config, "model.algorithms.dp_rt.diffusion.loss_type")
+        get_required(config, "model.algorithms.dp_rt.regression.hidden_features")
+        return
     raise NotImplementedError(
         f"model.algorithm={algorithm} is reserved for future work. "
-        "The current mainline implements cvae, dexdiffuser, and udgm."
+        "The current mainline implements cvae, dexdiffuser, dexdiffuser_rt, udgm, udgm_rt, dp, and dp_rt."
     )
 
 

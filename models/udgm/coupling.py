@@ -3,7 +3,7 @@ from __future__ import annotations
 import torch
 from torch import nn
 
-from models.udgm.utils import build_mlp
+from models.udgm.utils import build_mlp, build_residual_mlp
 
 
 class ConditionedAffineCoupling(nn.Module):
@@ -18,6 +18,8 @@ class ConditionedAffineCoupling(nn.Module):
         mask: torch.Tensor,
         scale_clamp: float = 2.0,
         activation: str = "leaky_relu",
+        conditioner_type: str = "residual",
+        residual_num_blocks: int = 2,
     ) -> None:
         super().__init__()
         self.target_dim = int(target_dim)
@@ -33,13 +35,30 @@ class ConditionedAffineCoupling(nn.Module):
         hidden_dims = [int(hidden_dim)] * int(num_blocks_per_layer)
         self.register_buffer("mask", mask.reshape(1, self.target_dim), persistent=False)
         self.register_buffer("inv_mask", (1.0 - mask).reshape(1, self.target_dim), persistent=False)
-        self.conditioner = build_mlp(
-            input_dim=self.target_dim + self.condition_dim,
-            hidden_dims=hidden_dims,
-            output_dim=self.target_dim * 2,
-            activation=activation,
-            zero_init_last=True,
-        )
+        conditioner_kind = str(conditioner_type).strip().lower()
+        if conditioner_kind == "mlp":
+            self.conditioner = build_mlp(
+                input_dim=self.target_dim + self.condition_dim,
+                hidden_dims=hidden_dims,
+                output_dim=self.target_dim * 2,
+                activation=activation,
+                zero_init_last=True,
+            )
+        elif conditioner_kind == "residual":
+            self.conditioner = build_residual_mlp(
+                input_dim=self.target_dim + self.condition_dim,
+                output_dim=self.target_dim * 2,
+                hidden_features=int(hidden_dim),
+                num_blocks=int(residual_num_blocks),
+            )
+            last_linear = self.conditioner.final_layer
+            nn.init.zeros_(last_linear.weight)
+            nn.init.zeros_(last_linear.bias)
+        else:
+            raise ValueError(
+                "Unsupported conditioner_type for ConditionedAffineCoupling: "
+                f"{conditioner_type}."
+            )
 
     def _condition(self, x_masked: torch.Tensor, context: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         features = torch.cat([x_masked, context], dim=-1)

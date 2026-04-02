@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from nflows.nn.nets.resnet import ResidualNet
 from torch import nn
 
 
@@ -38,3 +39,22 @@ def build_mlp(
         if not is_last:
             layers.append(build_activation(activation))
     return nn.Sequential(*layers)
+
+
+def build_residual_mlp(
+    input_dim: int,
+    output_dim: int,
+    *,
+    hidden_features: int,
+    num_blocks: int = 2,
+    dropout_probability: float = 0.0,
+    use_batch_norm: bool = False,
+) -> ResidualNet:
+    return ResidualNet(
+        in_features=int(input_dim),
+        out_features=int(output_dim),
+        hidden_features=int(hidden_features),
+        num_blocks=int(num_blocks),
+        dropout_probability=float(dropout_probability),
+        use_batch_norm=bool(use_batch_norm),
+    )

@@ -31,6 +31,8 @@ class UDGMScModel(BaseSCModel):
             condition_dim=self.condition_dim,
             hidden_dims=list(condition_config.get("hidden_dims", [self.point_feat_dim])),
             activation=str(condition_config.get("activation", "leaky_relu")),
+            network_type=str(condition_config.get("network_type", "residual")),
+            residual_num_blocks=int(condition_config.get("residual_num_blocks", 2)),
         )
 
         flow_config = dict(algorithm_config.get("flow", {}))
@@ -45,7 +47,18 @@ class UDGMScModel(BaseSCModel):
             num_blocks_per_layer=int(flow_config.get("num_blocks_per_layer", 2)),
             scale_clamp=float(flow_config.get("scale_clamp", 2.0)),
             activation=flow_activation,
+            use_actnorm=bool(flow_config.get("use_actnorm", True)),
+            use_invertible_linear=bool(flow_config.get("use_invertible_linear", True)),
+            conditioner_type=str(flow_config.get("conditioner_type", "residual")),
+            residual_num_blocks=int(flow_config.get("residual_num_blocks", 2)),
         )
+        self.loss_clamp_max = flow_config.get("loss_clamp_max")
+        if self.loss_clamp_max is not None:
+            self.loss_clamp_max = float(self.loss_clamp_max)
+            if self.loss_clamp_max <= 0.0:
+                raise ValueError(
+                    f"model.algorithms.udgm.flow.loss_clamp_max must be positive, got {self.loss_clamp_max}."
+                )
 
     def _build_condition(self, batch: dict[str, torch.Tensor]) -> torch.Tensor:
         global_feature = self.encode_condition(batch)
@@ -55,12 +68,20 @@ class UDGMScModel(BaseSCModel):
         target = self.codec.build_from_batch(batch)
         condition = self._build_condition(batch)
         log_prob = self.flow.log_prob(target, condition)
-        loss_nll = -log_prob.mean()
-        return {
+        raw_nll = -log_prob
+        nll = raw_nll
+        if self.loss_clamp_max is not None:
+            nll = nll.clamp_max(self.loss_clamp_max)
+        loss_nll = nll.mean()
+        outputs = {
             "loss_nll": loss_nll,
             "mean_log_prob": log_prob.mean(),
+            "raw_nll": raw_nll.mean(),
             "loss": loss_nll,
         }
+        if self.loss_clamp_max is not None:
+            outputs["clip_fraction"] = (raw_nll > self.loss_clamp_max).float().mean()
+        return outputs
 
     def infer(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         sampled = self.sample(batch=batch, num_samples=1)

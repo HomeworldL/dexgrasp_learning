@@ -48,40 +48,65 @@ class DDPM(nn.Module):
         x0: torch.Tensor,
         context: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        batch_size = x0.shape[0]
+        outputs = self.compute_loss_with_prediction(x0=x0, context=context)
+        return {
+            "loss_noise": outputs["loss_noise"],
+            "loss": outputs["loss_noise"],
+        }
+
+    def _sample_training_timesteps(
+        self,
+        batch_size: int,
+        device: torch.device,
+    ) -> torch.Tensor:
         if self.rand_t_type == "all":
-            timesteps = torch.randint(
+            return torch.randint(
                 0,
                 self.timesteps,
                 (batch_size,),
-                device=x0.device,
+                device=device,
             ).long()
-        elif self.rand_t_type == "half":
+        if self.rand_t_type == "half":
             half = torch.randint(
                 0,
                 self.timesteps,
                 ((batch_size + 1) // 2,),
-                device=x0.device,
+                device=device,
             )
             if batch_size % 2 == 1:
-                timesteps = torch.cat([half, self.timesteps - half[:-1] - 1], dim=0).long()
-            else:
-                timesteps = torch.cat([half, self.timesteps - half - 1], dim=0).long()
-        else:
-            raise ValueError(f"Unsupported rand_t_type: {self.rand_t_type}")
+                return torch.cat([half, self.timesteps - half[:-1] - 1], dim=0).long()
+            return torch.cat([half, self.timesteps - half - 1], dim=0).long()
+        raise ValueError(f"Unsupported rand_t_type: {self.rand_t_type}")
 
+    def _noise_loss(
+        self,
+        pred_noise: torch.Tensor,
+        noise: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.loss_type == "l1":
+            return F.l1_loss(pred_noise, noise)
+        if self.loss_type == "l2":
+            return F.mse_loss(pred_noise, noise)
+        raise ValueError(f"Unsupported loss_type: {self.loss_type}")
+
+    def compute_loss_with_prediction(
+        self,
+        x0: torch.Tensor,
+        context: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        batch_size = x0.shape[0]
+        timesteps = self._sample_training_timesteps(batch_size=batch_size, device=x0.device)
         noise = torch.randn_like(x0, device=x0.device)
         x_t = self.q_sample(x0=x0, t=timesteps, noise=noise)
-        pred_noise = self.eps_model(x_t, timesteps, context)
-        if self.loss_type == "l1":
-            loss_noise = F.l1_loss(pred_noise, noise)
-        elif self.loss_type == "l2":
-            loss_noise = F.mse_loss(pred_noise, noise)
-        else:
-            raise ValueError(f"Unsupported loss_type: {self.loss_type}")
+        pred_noise, pred_x0 = self.model_predict(x_t, timesteps, context)
+        loss_noise = self._noise_loss(pred_noise=pred_noise, noise=noise)
         return {
             "loss_noise": loss_noise,
             "loss": loss_noise,
+            "pred_noise": pred_noise,
+            "pred_x0": pred_x0,
+            "timesteps": timesteps,
+            "x_t": x_t,
         }
 
     def model_predict(

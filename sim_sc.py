@@ -84,11 +84,15 @@ def load_evaluator(
     return model, checkpoint_config
 
 
-def build_sim_output_dir(checkpoint_path: str) -> Path:
-    """仿真输出固定落到训练 run 目录下的 sim/。"""
+def build_sim_output_dir(
+    checkpoint_path: str,
+    evaluator_enabled: bool = False,
+) -> Path:
+    """仿真输出固定落到训练 run 目录下的 sim/ 或 sim_evaluator/。"""
     checkpoint_file = Path(checkpoint_path).expanduser().resolve()
     run_dir = checkpoint_file.parent
-    sim_dir = run_dir / "sim"
+    sim_dir_name = "sim_evaluator" if evaluator_enabled else "sim"
+    sim_dir = run_dir / sim_dir_name
     sim_dir.mkdir(parents=True, exist_ok=True)
     return sim_dir
 
@@ -384,7 +388,10 @@ def main() -> None:
             attempt_records[0]["simulation_time_sec"],
         )
 
-    run_dir = build_sim_output_dir(str(checkpoint_path))
+    run_dir = build_sim_output_dir(
+        str(checkpoint_path),
+        evaluator_enabled=evaluator_enabled,
+    )
     successful_objects = int(sum(1 for item in summary_items if item["success"]))
     summary = {
         "checkpoint_path": str(Path(checkpoint_path).expanduser().resolve()),

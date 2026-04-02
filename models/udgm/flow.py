@@ -6,6 +6,70 @@ import torch
 from torch import nn
 
 from models.udgm.coupling import ConditionedAffineCoupling
+from models.udgm.layers import ActNorm1d, InvertibleLinear
+
+
+class UDGMFlowStep(nn.Module):
+    def __init__(
+        self,
+        target_dim: int,
+        condition_dim: int,
+        hidden_dim: int,
+        num_blocks_per_layer: int,
+        mask: torch.Tensor,
+        *,
+        scale_clamp: float,
+        activation: str,
+        use_actnorm: bool,
+        use_invertible_linear: bool,
+        conditioner_type: str,
+        residual_num_blocks: int,
+    ) -> None:
+        super().__init__()
+        self.actnorm = ActNorm1d(target_dim) if use_actnorm else None
+        self.linear = InvertibleLinear(target_dim) if use_invertible_linear else None
+        self.coupling = ConditionedAffineCoupling(
+            target_dim=target_dim,
+            condition_dim=condition_dim,
+            hidden_dim=hidden_dim,
+            num_blocks_per_layer=num_blocks_per_layer,
+            mask=mask,
+            scale_clamp=scale_clamp,
+            activation=activation,
+            conditioner_type=conditioner_type,
+            residual_num_blocks=residual_num_blocks,
+        )
+
+    def forward_transform(
+        self,
+        z: torch.Tensor,
+        context: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        x = z
+        log_det = torch.zeros(z.shape[0], device=z.device, dtype=z.dtype)
+        if self.actnorm is not None:
+            x, delta = self.actnorm.forward_transform(x)
+            log_det = log_det + delta
+        if self.linear is not None:
+            x, delta = self.linear.forward_transform(x)
+            log_det = log_det + delta
+        x, delta = self.coupling.forward_transform(x, context)
+        log_det = log_det + delta
+        return x, log_det
+
+    def inverse_transform(
+        self,
+        x: torch.Tensor,
+        context: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        z, log_det = self.coupling.inverse_transform(x, context)
+        if self.linear is not None:
+            z, delta = self.linear.inverse_transform(z)
+            log_det = log_det + delta
+        if self.actnorm is not None:
+            z, delta = self.actnorm.inverse_transform(z)
+            log_det = log_det + delta
+        return z, log_det
 
 
 class UDGMFlow(nn.Module):
@@ -20,6 +84,10 @@ class UDGMFlow(nn.Module):
         num_blocks_per_layer: int,
         scale_clamp: float = 2.0,
         activation: str = "leaky_relu",
+        use_actnorm: bool = True,
+        use_invertible_linear: bool = True,
+        conditioner_type: str = "residual",
+        residual_num_blocks: int = 2,
     ) -> None:
         super().__init__()
         self.target_dim = int(target_dim)
@@ -32,12 +100,12 @@ class UDGMFlow(nn.Module):
         if self.num_layers <= 0:
             raise ValueError(f"num_layers must be positive, got {num_layers}.")
 
-        layers: list[ConditionedAffineCoupling] = []
+        layers: list[UDGMFlowStep] = []
         for layer_index in range(self.num_layers):
             parity = layer_index % 2
             mask = ((torch.arange(self.target_dim) + parity) % 2 == 0).to(torch.float32)
             layers.append(
-                ConditionedAffineCoupling(
+                UDGMFlowStep(
                     target_dim=self.target_dim,
                     condition_dim=self.condition_dim,
                     hidden_dim=self.hidden_dim,
@@ -45,6 +113,10 @@ class UDGMFlow(nn.Module):
                     mask=mask,
                     scale_clamp=scale_clamp,
                     activation=activation,
+                    use_actnorm=use_actnorm,
+                    use_invertible_linear=use_invertible_linear,
+                    conditioner_type=conditioner_type,
+                    residual_num_blocks=residual_num_blocks,
                 )
             )
         self.layers = nn.ModuleList(layers)
