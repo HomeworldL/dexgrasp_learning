@@ -10,23 +10,59 @@ from models.backbones.bps import BPSEncoder
 from models.backbones.pointnet import PointNet
 
 
+SUPPORTED_INPUT_ENCODERS = frozenset({"pointnet", "bps"})
+
+
+def normalize_algorithm_name(raw_value: Any) -> str:
+    return str(raw_value).strip().lower()
+
+
+def normalize_prediction_structure_name(raw_value: Any) -> str:
+    return str(raw_value).strip().lower()
+
+
+def normalize_input_encoder_name(raw_value: Any) -> str:
+    return str(raw_value).strip().lower()
+
+
+def get_model_required(config: dict[str, Any], dotted_key: str) -> Any:
+    """读取模型侧必填配置项，缺失则立即报错。"""
+    current: Any = config
+    traversed: list[str] = []
+    for key in dotted_key.split("."):
+        traversed.append(key)
+        if not isinstance(current, dict) or key not in current:
+            raise KeyError(f"Missing required config key: {'.'.join(traversed)}")
+        current = current[key]
+    return current
+
+
 def materialize_model_config(config: dict[str, Any]) -> dict[str, Any]:
-    """展开统一配置中的 algorithm / encoder 选择。"""
+    """展开统一配置中的 algorithm / prediction_structure / encoder 选择。"""
     model_config = deepcopy(dict(config.get("model", {})))
-    algorithm = str(model_config.get("algorithm", "cvae")).strip().lower()
-    input_encoder_selector = deepcopy(dict(model_config.get("input_encoder", {})))
-    encoder_name = str(input_encoder_selector.get("name", "pointnet")).strip().lower()
+    algorithm = normalize_algorithm_name(model_config.get("algorithm", "cvae"))
+    prediction_structure_raw = dict(model_config.get("prediction_structure", {})).get("name")
+    if prediction_structure_raw is None:
+        raise KeyError("Missing required config key: model.prediction_structure.name")
+    prediction_structure_name = normalize_prediction_structure_name(
+        prediction_structure_raw
+    )
+    input_encoder_name = normalize_input_encoder_name(
+        dict(model_config.get("input_encoder", {})).get("name", "pointnet")
+    )
 
     effective = deepcopy(dict(model_config.get("common", {})))
-    effective.update(deepcopy(dict(model_config.get("algorithms", {}).get(algorithm, {}))))
+    algorithm_config = deepcopy(dict(model_config.get("algorithms", {}).get(algorithm, {})))
+    effective.update(deepcopy(dict(algorithm_config.get(prediction_structure_name, {}))))
 
     input_encoder_config = deepcopy(
-        dict(model_config.get("input_encoders", {}).get(encoder_name, {}))
+        dict(model_config.get("input_encoders", {}).get(input_encoder_name, {}))
     )
-    input_encoder_config.update(input_encoder_selector)
-    input_encoder_config["name"] = encoder_name
+    input_encoder_config.update(deepcopy(dict(model_config.get("input_encoder", {}))))
+    input_encoder_config["name"] = input_encoder_name
     effective["input_encoder"] = input_encoder_config
     effective["algorithm"] = algorithm
+    effective["prediction_structure_name"] = prediction_structure_name
     return effective
 
 
@@ -34,7 +70,9 @@ def build_input_encoder(model_config: dict[str, Any]) -> nn.Module:
     """按统一配置构建点云编码器。"""
     point_feat_dim = int(model_config.get("point_feat_dim", 128))
     input_encoder_config = dict(model_config.get("input_encoder", {}))
-    input_encoder_name = str(input_encoder_config.get("name", "pointnet")).strip().lower()
+    input_encoder_name = normalize_input_encoder_name(
+        input_encoder_config.get("name", "pointnet")
+    )
 
     if input_encoder_name == "pointnet":
         return PointNet(
@@ -64,7 +102,8 @@ def build_input_encoder(model_config: dict[str, Any]) -> nn.Module:
 
     raise NotImplementedError(
         f"model.input_encoder.name={input_encoder_name} is reserved for future work. "
-        "The current mainline implements pointnet and bps."
+        "The current mainline implements "
+        f"{', '.join(sorted(SUPPORTED_INPUT_ENCODERS))}."
     )
 
 
@@ -75,10 +114,15 @@ class BaseModel(nn.Module):
         super().__init__()
         self.config = config
         self.model_config = materialize_model_config(config)
-        self.algorithm = str(self.model_config.get("algorithm", "cvae")).strip().lower()
-        self.input_encoder_name = str(
+        self.algorithm = normalize_algorithm_name(
+            self.model_config.get("algorithm", "cvae")
+        )
+        self.prediction_structure_name = normalize_prediction_structure_name(
+            self.model_config["prediction_structure_name"]
+        )
+        self.input_encoder_name = normalize_input_encoder_name(
             self.model_config.get("input_encoder", {}).get("name", "pointnet")
-        ).strip().lower()
+        )
 
         self.point_feat_dim = int(self.model_config.get("point_feat_dim", 128))
         self.init_pose_dim = int(self.model_config.get("init_pose_dim", 6))
@@ -118,6 +162,26 @@ class BaseModel(nn.Module):
                 ..., squeeze_end : squeeze_end + self.joint_dim
             ],
         }
+
+    def require_algorithm_config(self, relative_key: str) -> Any:
+        """读取当前算法当前结构下的必填配置。"""
+        return get_model_required(
+            self.config,
+            "model.algorithms."
+            f"{self.algorithm}.{self.prediction_structure_name}.{relative_key}",
+        )
+
+    def get_staged_regression_config(self) -> dict[str, Any]:
+        """读取 staged 回归头统一配置。"""
+        if self.prediction_structure_name != "staged":
+            raise RuntimeError(
+                "get_staged_regression_config is only valid for staged prediction structures."
+            )
+        self.require_algorithm_config("regression.hidden_dims")
+        self.require_algorithm_config("regression.activation")
+        self.require_algorithm_config("regression.network_type")
+        self.require_algorithm_config("regression.residual_num_blocks")
+        return dict(self.model_config.get("regression", {}))
 
     @staticmethod
     def _validate_num_samples(num_samples: int) -> None:

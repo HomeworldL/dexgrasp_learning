@@ -1,7 +1,7 @@
 from .condition import UDGMConditionAdapter
 from .flow import UDGMFlow
 from .representation import FlowTargetCodec, InitJointCodec, SqueezePoseCodec
-from .rt import UDGMRTHead
+from .staged import UDGMStagedHead
 
 __all__ = [
     "FlowTargetCodec",
@@ -9,5 +9,5 @@ __all__ = [
     "InitJointCodec",
     "UDGMConditionAdapter",
     "UDGMFlow",
-    "UDGMRTHead",
+    "UDGMStagedHead",
 ]

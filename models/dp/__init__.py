@@ -1,9 +1,9 @@
 from models.dp.diffusion import GaussianDiffusion1D, MLPWrapper
-from models.dp.heads import DPDiffusionHead, DPDiffusionRTHead
+from models.dp.heads import DPDiffusionHead, DPStagedDiffusionHead
 
 __all__ = [
     "DPDiffusionHead",
-    "DPDiffusionRTHead",
+    "DPStagedDiffusionHead",
     "GaussianDiffusion1D",
     "MLPWrapper",
 ]

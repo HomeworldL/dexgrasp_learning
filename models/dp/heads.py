@@ -4,8 +4,8 @@ from typing import Any
 
 import torch
 import torch.nn as nn
-from nflows.nn.nets.resnet import ResidualNet
 
+from models.basic_mlp import BasicMLP
 from models.dp.diffusion import GaussianDiffusion1D, MLPWrapper
 
 
@@ -46,24 +46,8 @@ class Normalization(nn.Module):
         return x * self.running_ms.std + self.running_ms.mean
 
 
-class BasicMLP(nn.Module):
-    def __init__(self, input_dim: int, output_dim: int, hidden_features: int = 64) -> None:
-        super().__init__()
-        self.net = ResidualNet(
-            int(input_dim),
-            int(output_dim),
-            hidden_features=int(hidden_features),
-            num_blocks=2,
-            dropout_probability=0.0,
-            use_batch_norm=False,
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
-
-
 class DPDiffusionHead(nn.Module):
-    """DexLearn DiffusionRTJ 的当前仓库适配版。"""
+    """当前仓库的 flat 结构轻量 diffusion head。"""
 
     def __init__(
         self,
@@ -109,8 +93,8 @@ class DPDiffusionHead(nn.Module):
         )
 
 
-class DPDiffusionRTHead(nn.Module):
-    """DexLearn DiffusionRT_MLPRTJ 的当前仓库适配版。"""
+class DPStagedDiffusionHead(nn.Module):
+    """当前仓库的 staged 结构轻量 diffusion head。"""
 
     def __init__(
         self,
@@ -120,7 +104,7 @@ class DPDiffusionRTHead(nn.Module):
         joint_dim: int,
         diffusion_config: dict[str, Any],
         *,
-        mlp_hidden_features: int = 64,
+        regression_config: dict[str, Any] | None = None,
         rms_enabled: bool = True,
         rms_max_update: int = 2000,
     ) -> None:
@@ -144,10 +128,16 @@ class DPDiffusionRTHead(nn.Module):
             if self.rms_enabled
             else None
         )
+        regression_mlp_config = dict(regression_config or {})
         self.regression_head = BasicMLP(
-            self.condition_dim + self.squeeze_pose_dim,
-            self.regression_dim,
-            hidden_features=mlp_hidden_features,
+            input_dim=self.condition_dim + self.squeeze_pose_dim,
+            output_dim=self.regression_dim,
+            hidden_dims=list(regression_mlp_config.get("hidden_dims", [256, 256])),
+            activation=str(regression_mlp_config.get("activation", "leaky_relu")),
+            network_type=str(regression_mlp_config.get("network_type", "residual")),
+            residual_num_blocks=int(
+                regression_mlp_config.get("residual_num_blocks", 2)
+            ),
         )
         self.pose_loss = nn.SmoothL1Loss()
         self.joint_loss = nn.SmoothL1Loss()

@@ -45,7 +45,7 @@ def _base_model_common() -> dict:
     }
 
 
-def _base_config(algorithm: str) -> dict:
+def _base_config(prediction_structure: str = "flat") -> dict:
     return {
         "seed": 0,
         "data": {
@@ -56,46 +56,54 @@ def _base_config(algorithm: str) -> dict:
             "point_sampling": "random",
         },
         "model": {
-            "algorithm": algorithm,
+            "algorithm": "dp",
+            "prediction_structure": {"name": prediction_structure},
             "input_encoder": {"name": "pointnet"},
             **_base_model_common(),
             "algorithms": {
                 "dp": {
-                    "rms": {"enabled": True, "max_update": 10},
-                    "diffusion": {
-                        "ode": True,
-                        "scheduler_type": "DDIMScheduler",
-                        "scheduler": {
-                            "beta_schedule": "squaredcos_cap_v2",
-                            "prediction_type": "v_prediction",
-                            "num_train_timesteps": 16,
-                            "clip_sample": False,
+                    "flat": {
+                        "rms": {"enabled": True, "max_update": 10},
+                        "diffusion": {
+                            "ode": True,
+                            "scheduler_type": "DDIMScheduler",
+                            "scheduler": {
+                                "beta_schedule": "squaredcos_cap_v2",
+                                "prediction_type": "v_prediction",
+                                "num_train_timesteps": 16,
+                                "clip_sample": False,
+                            },
+                            "num_inference_timesteps": 4,
+                            "log_prob_type": None,
+                            "loss_type": "l1",
                         },
-                        "num_inference_timesteps": 4,
-                        "log_prob_type": None,
-                        "loss_type": "l1",
                     },
-                },
-                "dp_rt": {
-                    "rms": {"enabled": True, "max_update": 10},
-                    "regression": {"hidden_features": 32},
-                    "loss_weights": {
-                        "diffusion": 1.0,
-                        "init_pose": 1.0,
-                        "joint": 1.0,
-                    },
-                    "diffusion": {
-                        "ode": True,
-                        "scheduler_type": "DDIMScheduler",
-                        "scheduler": {
-                            "beta_schedule": "squaredcos_cap_v2",
-                            "prediction_type": "v_prediction",
-                            "num_train_timesteps": 16,
-                            "clip_sample": False,
+                    "staged": {
+                        "rms": {"enabled": True, "max_update": 10},
+                        "regression": {
+                            "hidden_dims": [32, 32],
+                            "activation": "leaky_relu",
+                            "network_type": "residual",
+                            "residual_num_blocks": 2,
                         },
-                        "num_inference_timesteps": 4,
-                        "log_prob_type": None,
-                        "loss_type": "l1",
+                        "loss_weights": {
+                            "diffusion": 1.0,
+                            "init_pose": 1.0,
+                            "joint": 1.0,
+                        },
+                        "diffusion": {
+                            "ode": True,
+                            "scheduler_type": "DDIMScheduler",
+                            "scheduler": {
+                                "beta_schedule": "squaredcos_cap_v2",
+                                "prediction_type": "v_prediction",
+                                "num_train_timesteps": 16,
+                                "clip_sample": False,
+                            },
+                            "num_inference_timesteps": 4,
+                            "log_prob_type": None,
+                            "loss_type": "l1",
+                        },
                     },
                 },
             },
@@ -123,8 +131,8 @@ def _dummy_batch(batch_size: int = 2, n_points: int = 64) -> dict[str, torch.Ten
     }
 
 
-def test_dp_pointnet_forward_and_sample() -> None:
-    config = _base_config("dp")
+def test_dp_flat_pointnet_forward_and_sample() -> None:
+    config = _base_config("flat")
     model = build_model(config)
     batch = _dummy_batch()
     outputs = model(batch)
@@ -135,8 +143,8 @@ def test_dp_pointnet_forward_and_sample() -> None:
     assert sampled["pred_squeeze_joint"].shape == (2, 3, 20)
 
 
-def test_dp_rt_bps_forward_and_sample() -> None:
-    config = _base_config("dp_rt")
+def test_dp_staged_bps_forward_and_sample() -> None:
+    config = _base_config("staged")
     config["model"]["input_encoder"]["name"] = "bps"
     model = build_model(config)
     batch = _dummy_batch()
@@ -180,9 +188,9 @@ class _CaptureRegression(nn.Module):
         return x.new_zeros(x.shape[0], self.output_dim)
 
 
-def test_dp_rt_forward_uses_predicted_squeeze_pose() -> None:
-    config = _base_config("dp_rt")
-    config["model"]["algorithms"]["dp_rt"]["rms"]["enabled"] = False
+def test_dp_staged_forward_uses_predicted_squeeze_pose() -> None:
+    config = _base_config("staged")
+    config["model"]["algorithms"]["dp"]["staged"]["rms"]["enabled"] = False
     model = build_model(config)
     batch = _dummy_batch()
     predicted_pose = torch.full_like(batch["squeeze_pose"], 0.25)
@@ -199,6 +207,7 @@ def test_dp_rt_forward_uses_predicted_squeeze_pose() -> None:
 
 
 def test_dp_listed_in_registry() -> None:
-    config = deepcopy(_base_config("dp"))
+    config = deepcopy(_base_config("flat"))
     model = build_model(config)
     assert model.algorithm == "dp"
+    assert model.prediction_structure_name == "flat"

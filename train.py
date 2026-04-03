@@ -52,10 +52,15 @@ def build_device(device_name: str) -> torch.device:
 def build_output_dir(config: dict[str, Any]) -> Path:
     output_root = Path(config["train"]["output_dir"]).expanduser().resolve()
     algorithm = str(config["model"]["algorithm"]).strip().lower()
+    prediction_structure_name = str(
+        config["model"]["prediction_structure"]["name"]
+    ).strip().lower()
     input_encoder_name = str(config["model"]["input_encoder"]["name"]).strip().lower()
     frame = normalize_frame(str(config["data"]["frame"]))
     cloud_type = normalize_cloud_type(str(config["data"]["cloud_type"]))
-    experiment_tag = f"{algorithm}_{input_encoder_name}_{frame}_{cloud_type}"
+    experiment_tag = (
+        f"{algorithm}_{prediction_structure_name}_{input_encoder_name}_{frame}_{cloud_type}"
+    )
     run_dir = output_root / experiment_tag / datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir

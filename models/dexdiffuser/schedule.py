@@ -68,9 +68,7 @@ def make_schedule_ddpm(
 def parse_schedule_config(config: dict[str, Any]) -> dict[str, Any]:
     schedule = dict(config)
     if "beta" not in schedule:
-        raise KeyError("Missing required config key: model.algorithms.dexdiffuser.diffusion.schedule.beta")
+        raise KeyError("Missing required config key: diffusion.schedule.beta")
     if "beta_schedule" not in schedule:
-        raise KeyError(
-            "Missing required config key: model.algorithms.dexdiffuser.diffusion.schedule.beta_schedule"
-        )
+        raise KeyError("Missing required config key: diffusion.schedule.beta_schedule")
     return schedule

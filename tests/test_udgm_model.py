@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 import torch
+from torch import nn
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -13,7 +14,7 @@ if str(REPO_ROOT) not in sys.path:
 from models import build_model
 
 
-def _base_config() -> dict:
+def _base_config(prediction_structure: str = "flat") -> dict:
     return {
         "seed": 0,
         "data": {
@@ -25,6 +26,7 @@ def _base_config() -> dict:
         },
         "model": {
             "algorithm": "udgm",
+            "prediction_structure": {"name": prediction_structure},
             "input_encoder": {"name": "pointnet"},
             "common": {
                 "point_feat_dim": 64,
@@ -34,23 +36,60 @@ def _base_config() -> dict:
             },
             "algorithms": {
                 "cvae": {
-                    "latent_dim": 32,
-                    "encoder_hidden_dims": [64, 32],
-                    "decoder_hidden_dims": [32, 32],
+                    "flat": {
+                        "latent_dim": 32,
+                        "encoder_hidden_dims": [64, 32],
+                        "decoder_hidden_dims": [32, 32],
+                    },
                 },
                 "udgm": {
-                    "condition_dim": 48,
-                    "target_normalization": {"enabled": False},
-                    "condition": {
-                        "hidden_dims": [64],
-                        "activation": "leaky_relu",
+                    "flat": {
+                        "condition_dim": 48,
+                        "target_normalization": {"enabled": False},
+                        "condition": {
+                            "hidden_dims": [64],
+                            "activation": "leaky_relu",
+                        },
+                        "flow": {
+                            "hidden_dim": 64,
+                            "num_layers": 4,
+                            "num_blocks_per_layer": 2,
+                            "scale_clamp": 2.0,
+                            "activation": "leaky_relu",
+                        },
                     },
-                    "flow": {
-                        "hidden_dim": 64,
-                        "num_layers": 4,
-                        "num_blocks_per_layer": 2,
-                        "scale_clamp": 2.0,
-                        "activation": "leaky_relu",
+                    "staged": {
+                        "condition_dim": 48,
+                        "target_normalization": {"enabled": False},
+                        "condition": {
+                            "hidden_dims": [64],
+                            "activation": "leaky_relu",
+                            "network_type": "residual",
+                            "residual_num_blocks": 2,
+                        },
+                        "flow": {
+                            "hidden_dim": 64,
+                            "num_layers": 4,
+                            "num_blocks_per_layer": 2,
+                            "scale_clamp": 2.0,
+                            "activation": "leaky_relu",
+                            "use_actnorm": True,
+                            "use_invertible_linear": True,
+                            "conditioner_type": "residual",
+                            "residual_num_blocks": 2,
+                            "loss_clamp_max": 80.0,
+                        },
+                        "regression": {
+                            "hidden_dims": [32, 32],
+                            "activation": "leaky_relu",
+                            "network_type": "residual",
+                            "residual_num_blocks": 2,
+                        },
+                        "loss_weights": {
+                            "flow": 1.0,
+                            "init_pose": 1.0,
+                            "joint": 1.0,
+                        },
                     },
                 },
             },
@@ -102,8 +141,8 @@ def _dummy_batch(batch_size: int = 2, n_points: int = 64) -> dict[str, torch.Ten
     }
 
 
-def test_udgm_pointnet_forward_and_sample() -> None:
-    model = build_model(_base_config())
+def test_udgm_flat_pointnet_forward_and_sample() -> None:
+    model = build_model(_base_config("flat"))
     batch = _dummy_batch()
 
     outputs = model(batch)
@@ -116,8 +155,8 @@ def test_udgm_pointnet_forward_and_sample() -> None:
     assert sampled["pred_squeeze_joint"].shape == (2, 3, 20)
 
 
-def test_udgm_bps_forward_and_sample() -> None:
-    config = deepcopy(_base_config())
+def test_udgm_flat_bps_forward_and_sample() -> None:
+    config = deepcopy(_base_config("flat"))
     config["model"]["input_encoder"]["name"] = "bps"
     model = build_model(config)
     batch = _dummy_batch()
@@ -129,3 +168,76 @@ def test_udgm_bps_forward_and_sample() -> None:
     assert sampled["pred_init_pose"].shape == (2, 2, 6)
     assert sampled["pred_squeeze_pose"].shape == (2, 2, 6)
     assert sampled["pred_squeeze_joint"].shape == (2, 2, 20)
+
+
+def test_udgm_staged_pointnet_forward_and_sample() -> None:
+    model = build_model(_base_config("staged"))
+    batch = _dummy_batch()
+    outputs = model(batch)
+    sampled = model.sample(batch, num_samples=3)
+    assert "loss_flow" in outputs
+    assert "loss_init_pose" in outputs
+    assert "loss_joint" in outputs
+    assert sampled["pred_init_pose"].shape == (2, 3, 6)
+    assert sampled["pred_squeeze_pose"].shape == (2, 3, 6)
+    assert sampled["pred_squeeze_joint"].shape == (2, 3, 20)
+
+
+def test_udgm_staged_bps_forward_and_sample() -> None:
+    config = deepcopy(_base_config("staged"))
+    config["model"]["input_encoder"]["name"] = "bps"
+    model = build_model(config)
+    batch = _dummy_batch()
+    outputs = model(batch)
+    sampled = model.sample(batch, num_samples=2)
+    assert "raw_nll" in outputs
+    assert sampled["pred_init_pose"].shape == (2, 2, 6)
+    assert sampled["pred_squeeze_pose"].shape == (2, 2, 6)
+    assert sampled["pred_squeeze_joint"].shape == (2, 2, 20)
+
+
+class _FakeFlow(nn.Module):
+    def __init__(self, sampled_pose: torch.Tensor) -> None:
+        super().__init__()
+        self.sampled_pose = sampled_pose
+
+    def log_prob(self, x: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
+        return x.new_zeros(x.shape[0])
+
+    def sample_and_log_prob(
+        self,
+        num_samples: int,
+        context: torch.Tensor,
+        *,
+        sort_by_log_prob: bool = True,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        batch_size = context.shape[0]
+        sampled = self.sampled_pose[:batch_size, None, :].expand(batch_size, num_samples, -1)
+        log_prob = torch.zeros(batch_size, num_samples, device=context.device, dtype=context.dtype)
+        return sampled, log_prob
+
+
+class _CaptureHead(nn.Module):
+    def __init__(self, output_dim: int) -> None:
+        super().__init__()
+        self.output_dim = output_dim
+        self.last_pose: torch.Tensor | None = None
+
+    def forward(self, condition: torch.Tensor, squeeze_pose: torch.Tensor) -> torch.Tensor:
+        self.last_pose = squeeze_pose.detach().clone()
+        if squeeze_pose.ndim == 2:
+            return squeeze_pose.new_zeros(squeeze_pose.shape[0], self.output_dim)
+        return squeeze_pose.new_zeros(squeeze_pose.shape[0], squeeze_pose.shape[1], self.output_dim)
+
+
+def test_udgm_staged_forward_uses_sampled_squeeze_pose() -> None:
+    model = build_model(_base_config("staged"))
+    batch = _dummy_batch()
+    predicted_pose = torch.full_like(batch["squeeze_pose"], 0.25)
+    model.flow = _FakeFlow(predicted_pose)
+    capture = _CaptureHead(output_dim=model.init_joint_codec.target_dim)
+    model.regression_head = capture
+    _ = model(batch)
+    assert capture.last_pose is not None
+    assert torch.allclose(capture.last_pose, predicted_pose)
+    assert not torch.allclose(capture.last_pose, batch["squeeze_pose"])

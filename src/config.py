@@ -9,13 +9,6 @@ import numpy as np
 import torch
 import yaml
 
-from models.registry import (
-    ALGORITHM_REGISTRY,
-    SUPPORTED_INPUT_ENCODERS,
-    normalize_algorithm_name,
-    normalize_input_encoder_name,
-)
-
 
 def load_config(path: str) -> dict[str, Any]:
     """加载 YAML 配置文件。"""
@@ -144,37 +137,13 @@ def validate_common_config(config: dict[str, Any]) -> None:
     normalize_point_sampling(config.get("data", {}).get("point_sampling", "random"))
     get_required(config, "data.n_points")
     get_required(config, "model.algorithm")
+    get_required(config, "model.prediction_structure.name")
     get_required(config, "model.input_encoder.name")
     get_required(config, "model.common.point_feat_dim")
     get_required(config, "model.common.joint_dim")
-    _validate_algorithm_config(config)
     get_required(config, "hand.xml_path")
     get_required(config, "hand.prepared_joints")
     get_required(config, "hand.target_body_params")
-
-
-def _validate_algorithm_config(config: dict[str, Any]) -> None:
-    algorithm = normalize_algorithm_name(get_required(config, "model.algorithm"))
-    spec = ALGORITHM_REGISTRY.get(algorithm)
-    if spec is not None:
-        for dotted_key in spec.required_keys:
-            get_required(config, dotted_key)
-        input_encoder_name = normalize_input_encoder_name(
-            get_required(config, "model.input_encoder.name")
-        )
-        if input_encoder_name not in SUPPORTED_INPUT_ENCODERS:
-            raise NotImplementedError(
-                f"model.input_encoder.name={input_encoder_name} is reserved for future work. "
-                "The current mainline implements "
-                f"{', '.join(sorted(SUPPORTED_INPUT_ENCODERS))}."
-            )
-        for dotted_key in spec.encoder_required_keys.get(input_encoder_name, ()):
-            get_required(config, dotted_key)
-        return
-    raise NotImplementedError(
-        f"model.algorithm={algorithm} is reserved for future work. "
-        "The current mainline implements " + ", ".join(ALGORITHM_REGISTRY.keys()) + "."
-    )
 
 
 def validate_train_config(config: dict[str, Any]) -> None:
@@ -192,6 +161,7 @@ def validate_train_config(config: dict[str, Any]) -> None:
     initial_step = config.get("train", {}).get("initial_step")
     if initial_step is not None and int(initial_step) < 0:
         raise ValueError("train.initial_step must be non-negative when provided.")
+
 
 def validate_sim_config(config: dict[str, Any]) -> None:
     """校验仿真所需配置。"""
@@ -216,6 +186,7 @@ def validate_evaluator_train_config(config: dict[str, Any]) -> None:
     normalize_frame(get_required(config, "data.frame"))
     normalize_point_sampling(config.get("data", {}).get("point_sampling", "random"))
     get_required(config, "data.n_points")
+    get_required(config, "model.prediction_structure.name")
     get_required(config, "model.input_encoder.name")
     get_required(config, "model.common.point_feat_dim")
     get_required(config, "model.common.joint_dim")
